@@ -11,5 +11,6 @@ func test(a int, b int, c string) (int, string) {
 
 func main() {
 	test(1, 2, "3")
+	fmt.Println("321")
 	fmt.Println("123")
 }
