@@ -11,7 +11,7 @@ func main() {
 	//解锁，关闭文件
 	//在一个函数多次调用defer，执行时类似于栈的机制：先入后出
 
-	readFile("main.go")
+	readFile("01.struct-pointer.go")
 }
 
 func readFile(filename string) {
@@ -30,7 +30,7 @@ func readFile(filename string) {
 
 	//err一般nil代表没有错误，非nil代表执行失败
 	if err != nil {
-		fmt.Println("os.Open(\"main.go\") ===> 打开文件失败, err:", err)
+		fmt.Println("os.Open(\"01.struct-pointer.go\") ===> 打开文件失败, err:", err)
 		return
 	}
 
