@@ -22,5 +22,5 @@ func main() {
 	v := Vertex3{3, 4}
 	v.Scale(10)
 	fmt.Println(v.Abs())
-	fmt.Println(v)
+
 }
