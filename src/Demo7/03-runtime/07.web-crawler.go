@@ -30,7 +30,7 @@ func Crawl(url string, depth int, fetcher Fetcher) {
 }
 
 func main() {
-	Crawl("https://golang.com/", 4, fetcher)
+	Crawl("https://golang.org/", 4, fetcher)
 }
 
 // fakeFetcher 是返回若干结果的 Fetcher。
