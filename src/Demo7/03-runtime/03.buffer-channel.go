@@ -3,6 +3,8 @@ package main
 import "fmt"
 
 func main() {
+	//只会读前几个字符
+
 	ch := make(chan int, 6)
 	ch <- 1
 	ch <- 2
