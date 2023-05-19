@@ -10,7 +10,6 @@ func main() {
 
 	ip := "127.0.0.1"
 	port := 8088
-	//123321
 	address := fmt.Sprintf("%s:%d", ip, port)
 
 	//func Listen(network, address string) (Listener, error) {
