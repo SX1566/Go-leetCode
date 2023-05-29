@@ -15,18 +15,13 @@ import (
 	"strings"
 )
 
-// PlayEnabled specifies whether runnable playground snippets should be
-// displayed in the present user interface.
+// Is the playground available?
 var PlayEnabled = false
 
-// TODO(adg): replace the PlayEnabled flag with something less spaghetti-like.
+// TOOD(adg): replace the PlayEnabled flag with something less spaghetti-like.
 // Instead this will probably be determined by a template execution Context
 // value that contains various global metadata required when rendering
 // templates.
-
-// NotesEnabled specifies whether presenter notes should be displayed in the
-// present user interface.
-var NotesEnabled = false
 
 func init() {
 	Register("code", parseCode)
@@ -34,16 +29,13 @@ func init() {
 }
 
 type Code struct {
-	Cmd      string // original command from present source
 	Text     template.HTML
 	Play     bool   // runnable code
-	Edit     bool   // editable code
 	FileName string // file name
 	Ext      string // file extension
 	Raw      []byte // content of the file
 }
 
-func (c Code) PresentCmd() string   { return c.Cmd }
 func (c Code) TemplateName() string { return "code" }
 
 // The input line is a .code or .play entry with a file name and an optional HLfoo marker on the end.
@@ -56,20 +48,14 @@ var (
 )
 
 // parseCode parses a code present directive. Its syntax:
-//
-//	.code [-numbers] [-edit] <filename> [address] [highlight]
-//
+//   .code [-numbers] [-edit] <filename> [address] [highlight]
 // The directive may also be ".play" if the snippet is executable.
 func parseCode(ctx *Context, sourceFile string, sourceLine int, cmd string) (Elem, error) {
 	cmd = strings.TrimSpace(cmd)
-	origCmd := cmd
 
 	// Pull off the HL, if any, from the end of the input line.
 	highlight := ""
 	if hl := highlightRE.FindStringSubmatchIndex(cmd); len(hl) == 4 {
-		if hl[2] < 0 || hl[3] < 0 {
-			return nil, fmt.Errorf("%s:%d invalid highlight syntax", sourceFile, sourceLine)
-		}
 		highlight = cmd[hl[2]:hl[3]]
 		cmd = cmd[:hl[2]-2]
 	}
@@ -97,11 +83,6 @@ func parseCode(ctx *Context, sourceFile string, sourceLine int, cmd string) (Ele
 	lo, hi, err := addrToByteRange(addr, 0, textBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%s:%d: %v", sourceFile, sourceLine, err)
-	}
-	if lo > hi {
-		// The search in addrToByteRange can wrap around so we might
-		// end up with the range ending before its starting point
-		hi, lo = lo, hi
 	}
 
 	// Acme pattern matches can stop mid-line,
@@ -134,10 +115,8 @@ func parseCode(ctx *Context, sourceFile string, sourceLine int, cmd string) (Ele
 		return nil, err
 	}
 	return Code{
-		Cmd:      origCmd,
 		Text:     template.HTML(buf.String()),
 		Play:     play,
-		Edit:     data.Edit,
 		FileName: filepath.Base(filename),
 		Ext:      filepath.Ext(filename),
 		Raw:      rawCode(lines),
@@ -189,7 +168,7 @@ var codeTemplate = template.Must(template.New("code").Funcs(template.FuncMap{
 }).Parse(codeTemplateHTML))
 
 const codeTemplateHTML = `
-{{with .Prefix}}<pre style="display: none"><span>{{printf "%s" .}}</span></pre>{{end -}}
+{{with .Prefix}}<pre style="display: none"><span>{{printf "%s" .}}</span></pre>{{end}}
 
 <pre{{if .Edit}} contenteditable="true" spellcheck="false"{{end}}{{if .Numbers}} class="numbers"{{end}}>{{/*
 	*/}}{{range .Lines}}<span num="{{.N}}">{{/*
@@ -197,7 +176,8 @@ const codeTemplateHTML = `
 	*/}}{{else}}{{.L}}{{end}}{{/*
 */}}</span>
 {{end}}</pre>
-{{with .Suffix}}<pre style="display: none"><span>{{printf "%s" .}}</span></pre>{{end -}}
+
+{{with .Suffix}}<pre style="display: none"><span>{{printf "%s" .}}</span></pre>{{end}}
 `
 
 // codeLine represents a line of code extracted from a source file.
@@ -269,4 +249,45 @@ func parseArgs(name string, line int, args []string) (res []interface{}, err err
 		}
 	}
 	return
+}
+
+// parseArg returns the integer or string value of the argument and tells which it is.
+func parseArg(arg interface{}, max int) (ival int, sval string, isInt bool, err error) {
+	switch n := arg.(type) {
+	case int:
+		if n <= 0 || n > max {
+			return 0, "", false, fmt.Errorf("%d is out of range", n)
+		}
+		return n, "", true, nil
+	case string:
+		return 0, n, false, nil
+	}
+	return 0, "", false, fmt.Errorf("unrecognized argument %v type %T", arg, arg)
+}
+
+// match identifies the input line that matches the pattern in a code invocation.
+// If start>0, match lines starting there rather than at the beginning.
+// The return value is 1-indexed.
+func match(file string, start int, lines []string, pattern string) (int, error) {
+	// $ matches the end of the file.
+	if pattern == "$" {
+		if len(lines) == 0 {
+			return 0, fmt.Errorf("%q: empty file", file)
+		}
+		return len(lines), nil
+	}
+	// /regexp/ matches the line that matches the regexp.
+	if len(pattern) > 2 && pattern[0] == '/' && pattern[len(pattern)-1] == '/' {
+		re, err := regexp.Compile(pattern[1 : len(pattern)-1])
+		if err != nil {
+			return 0, err
+		}
+		for i := start; i < len(lines); i++ {
+			if re.MatchString(lines[i]) {
+				return i + 1, nil
+			}
+		}
+		return 0, fmt.Errorf("%s: no match for %#q", file, pattern)
+	}
+	return 0, fmt.Errorf("unrecognized pattern: %q", pattern)
 }

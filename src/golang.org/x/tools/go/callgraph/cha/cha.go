@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // Package cha computes the call graph of a Go program using the Class
 // Hierarchy Analysis (CHA) algorithm.
 //
@@ -20,9 +22,8 @@
 // Since CHA conservatively assumes that all functions are address-taken
 // and all concrete types are put into interfaces, it is sound to run on
 // partial programs, such as libraries without a main or test function.
+//
 package cha // import "golang.org/x/tools/go/callgraph/cha"
-
-// TODO(zpavlinovic): update CHA for how it handles generic function bodies.
 
 import (
 	"go/types"
@@ -35,6 +36,7 @@ import (
 
 // CallGraph computes the call graph of the specified program using the
 // Class Hierarchy Analysis algorithm.
+//
 func CallGraph(prog *ssa.Program) *callgraph.Graph {
 	cg := callgraph.New(nil) // TODO(adonovan) eliminate concept of rooted callgraph
 
@@ -47,36 +49,23 @@ func CallGraph(prog *ssa.Program) *callgraph.Graph {
 
 	// methodsByName contains all methods,
 	// grouped by name for efficient lookup.
-	// (methodsById would be better but not every SSA method has a go/types ID.)
 	methodsByName := make(map[string][]*ssa.Function)
 
-	// An imethod represents an interface method I.m.
-	// (There's no go/types object for it;
-	// a *types.Func may be shared by many interfaces due to interface embedding.)
-	type imethod struct {
-		I  *types.Interface
-		id string
-	}
-	// methodsMemo records, for every abstract method call I.m on
-	// interface type I, the set of concrete methods C.m of all
+	// methodsMemo records, for every abstract method call call I.f on
+	// interface type I, the set of concrete methods C.f of all
 	// types C that satisfy interface I.
-	//
-	// Abstract methods may be shared by several interfaces,
-	// hence we must pass I explicitly, not guess from m.
-	//
-	// methodsMemo is just a cache, so it needn't be a typeutil.Map.
-	methodsMemo := make(map[imethod][]*ssa.Function)
-	lookupMethods := func(I *types.Interface, m *types.Func) []*ssa.Function {
-		id := m.Id()
-		methods, ok := methodsMemo[imethod{I, id}]
+	methodsMemo := make(map[*types.Func][]*ssa.Function)
+	lookupMethods := func(m *types.Func) []*ssa.Function {
+		methods, ok := methodsMemo[m]
 		if !ok {
+			I := m.Type().(*types.Signature).Recv().Type().Underlying().(*types.Interface)
 			for _, f := range methodsByName[m.Name()] {
 				C := f.Signature.Recv().Type() // named or *named
 				if types.Implements(C, I) {
 					methods = append(methods, f)
 				}
 			}
-			methodsMemo[imethod{I, id}] = methods
+			methodsMemo[m] = methods
 		}
 		return methods
 	}
@@ -122,8 +111,7 @@ func CallGraph(prog *ssa.Program) *callgraph.Graph {
 				if site, ok := instr.(ssa.CallInstruction); ok {
 					call := site.Common()
 					if call.IsInvoke() {
-						tiface := call.Value.Type().Underlying().(*types.Interface)
-						addEdges(fnode, site, lookupMethods(tiface, call.Method))
+						addEdges(fnode, site, lookupMethods(call.Method))
 					} else if g := call.StaticCallee(); g != nil {
 						addEdge(fnode, site, g)
 					} else if _, ok := call.Value.(*ssa.Builtin); !ok {

@@ -1,4 +1,4 @@
-// Copyright 2015 The Go Authors. All rights reserved.
+// Copyright 2015 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,28 +10,24 @@ import (
 )
 
 func TestBuffer(t *testing.T) {
-	afterChan := make(chan time.Time)
 	ch := make(chan *Message)
 	go func() {
 		ch <- &Message{Kind: "err", Body: "a"}
 		ch <- &Message{Kind: "err", Body: "b"}
 		ch <- &Message{Kind: "out", Body: "1"}
 		ch <- &Message{Kind: "out", Body: "2"}
-		afterChan <- time.Time{} // value itself doesn't matter
+		time.Sleep(msgDelay * 2)
 		ch <- &Message{Kind: "out", Body: "3"}
 		ch <- &Message{Kind: "out", Body: "4"}
 		close(ch)
 	}()
 
 	var ms []*Message
-	timeAfter := func(d time.Duration) <-chan time.Time {
-		return afterChan
-	}
-	for m := range buffer(ch, timeAfter) {
+	for m := range buffer(ch) {
 		ms = append(ms, m)
 	}
 	if len(ms) != 3 {
-		t.Fatalf("got %v messages, want 3", len(ms))
+		t.Fatalf("got %v messages, want 2", len(ms))
 	}
 	if g, w := ms[0].Body, "ab"; g != w {
 		t.Errorf("message 0 body = %q, want %q", g, w)
@@ -69,5 +65,9 @@ func TestLimiter(t *testing.T) {
 	if n != msgLimit+1 {
 		t.Errorf("received %v messages, want %v", n, msgLimit+1)
 	}
-	<-kr
+	select {
+	case <-kr:
+	case <-time.After(100 * time.Millisecond):
+		t.Errorf("process wasn't killed after reaching limit")
+	}
 }

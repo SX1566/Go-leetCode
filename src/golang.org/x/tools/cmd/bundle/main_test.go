@@ -7,16 +7,14 @@ package main
 import (
 	"bytes"
 	"io/ioutil"
-	"os"
 	"os/exec"
 	"runtime"
 	"testing"
 
-	"golang.org/x/tools/go/packages/packagestest"
+	"golang.org/x/tools/go/buildutil"
 )
 
-func TestBundle(t *testing.T) { packagestest.TestAll(t, testBundle) }
-func testBundle(t *testing.T, x packagestest.Exporter) {
+func TestBundle(t *testing.T) {
 	load := func(name string) string {
 		data, err := ioutil.ReadFile(name)
 		if err != nil {
@@ -25,38 +23,27 @@ func testBundle(t *testing.T, x packagestest.Exporter) {
 		return string(data)
 	}
 
-	e := packagestest.Export(t, x, []packagestest.Module{
-		{
-			Name: "initial",
-			Files: map[string]interface{}{
-				"a.go": load("testdata/src/initial/a.go"),
-				"b.go": load("testdata/src/initial/b.go"),
-				"c.go": load("testdata/src/initial/c.go"),
-			},
+	ctxt = buildutil.FakeContext(map[string]map[string]string{
+		"initial": {
+			"a.go": load("testdata/src/initial/a.go"),
+			"b.go": load("testdata/src/initial/b.go"),
 		},
-		{
-			Name: "domain.name/importdecl",
-			Files: map[string]interface{}{
-				"p.go": load("testdata/src/domain.name/importdecl/p.go"),
-			},
+		"fmt": {
+			"print.go": `package fmt; func Println(...interface{})`,
 		},
 	})
-	defer e.Cleanup()
-	testingOnlyPackagesConfig = e.Config
 
-	os.Args = os.Args[:1] // avoid e.g. -test=short in the output
-	out, err := bundle("initial", "github.com/dest", "dest", "prefix", "tag")
-	if err != nil {
+	var out bytes.Buffer
+	if err := bundle(&out, "initial", "dest", "prefix"); err != nil {
 		t.Fatal(err)
 	}
-
-	if got, want := string(out), load("testdata/out.golden"); got != want {
+	if got, want := out.String(), load("testdata/out.golden"); got != want {
 		t.Errorf("-- got --\n%s\n-- want --\n%s\n-- diff --", got, want)
 
-		if err := ioutil.WriteFile("testdata/out.got", out, 0644); err != nil {
+		if err := ioutil.WriteFile("testdata/out.got", out.Bytes(), 0644); err != nil {
 			t.Fatal(err)
 		}
-		t.Log(diff("testdata/out.golden", "testdata/out.got"))
+		t.Log(diff("testdata/out.got", "testdata/out.golden"))
 	}
 }
 

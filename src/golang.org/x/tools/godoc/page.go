@@ -6,8 +6,6 @@ package godoc
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 )
 
@@ -16,16 +14,14 @@ type Page struct {
 	Title    string
 	Tabtitle string
 	Subtitle string
-	SrcPath  string
 	Query    string
 	Body     []byte
-	TreeView bool // page needs to contain treeview related js and css
+	Share    bool
 
-	// filled in by ServePage
-	SearchBox       bool
-	Playground      bool
-	Version         string
-	GoogleAnalytics string
+	// filled in by servePage
+	SearchBox  bool
+	Playground bool
+	Version    string
 }
 
 func (p *Presentation) ServePage(w http.ResponseWriter, page Page) {
@@ -35,24 +31,28 @@ func (p *Presentation) ServePage(w http.ResponseWriter, page Page) {
 	page.SearchBox = p.Corpus.IndexEnabled
 	page.Playground = p.ShowPlayground
 	page.Version = runtime.Version()
-	page.GoogleAnalytics = p.GoogleAnalytics
 	applyTemplateToResponseWriter(w, p.GodocHTML, page)
 }
 
 func (p *Presentation) ServeError(w http.ResponseWriter, r *http.Request, relpath string, err error) {
 	w.WriteHeader(http.StatusNotFound)
-	if perr, ok := err.(*os.PathError); ok {
-		rel, err := filepath.Rel(runtime.GOROOT(), perr.Path)
-		if err != nil {
-			perr.Path = "REDACTED"
-		} else {
-			perr.Path = filepath.Join("$GOROOT", rel)
-		}
-	}
 	p.ServePage(w, Page{
-		Title:           "File " + relpath,
-		Subtitle:        relpath,
-		Body:            applyTemplate(p.ErrorHTML, "errorHTML", err),
-		GoogleAnalytics: p.GoogleAnalytics,
+		Title:    "File " + relpath,
+		Subtitle: relpath,
+		Body:     applyTemplate(p.ErrorHTML, "errorHTML", err), // err may contain an absolute path!
+		Share:    allowShare(r),
 	})
+}
+
+var onAppengine = false // overriden in appengine.go when on app engine
+
+func allowShare(r *http.Request) bool {
+	if !onAppengine {
+		return true
+	}
+	switch r.Header.Get("X-AppEngine-Country") {
+	case "", "ZZ", "CN":
+		return false
+	}
+	return true
 }

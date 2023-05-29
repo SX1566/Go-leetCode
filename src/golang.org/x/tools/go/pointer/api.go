@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package pointer
 
 import (
@@ -16,9 +18,7 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-// A Config formulates a pointer analysis problem for Analyze. It is
-// only usable for a single invocation of Analyze and must not be
-// reused.
+// A Config formulates a pointer analysis problem for Analyze().
 type Config struct {
 	// Mains contains the set of 'main' packages to analyze
 	// Clients must provide the analysis with at least one
@@ -28,11 +28,7 @@ type Config struct {
 	// dependencies of any main package may still affect the
 	// analysis result, because they contribute runtime types and
 	// thus methods.
-	//
 	// TODO(adonovan): investigate whether this is desirable.
-	//
-	// Calls to generic functions will be unsound unless packages
-	// are built using the ssa.InstantiateGenerics builder mode.
 	Mains []*ssa.Package
 
 	// Reflection determines whether to handle reflection
@@ -67,7 +63,6 @@ type Config struct {
 	//
 	Queries         map[ssa.Value]struct{}
 	IndirectQueries map[ssa.Value]struct{}
-	extendedQueries map[ssa.Value][]*extendedQuery
 
 	// If Log is non-nil, log messages are written to it.
 	// Logging is extremely verbose.
@@ -87,6 +82,9 @@ const (
 
 // AddQuery adds v to Config.Queries.
 // Precondition: CanPoint(v.Type()).
+// TODO(adonovan): consider returning a new Pointer for this query,
+// which will be initialized during analysis.  That avoids the needs
+// for the corresponding ssa.Value-keyed maps in Config and Result.
 func (c *Config) AddQuery(v ssa.Value) {
 	if !CanPoint(v.Type()) {
 		panic(fmt.Sprintf("%s is not a pointer-like value: %s", v, v.Type()))
@@ -109,47 +107,6 @@ func (c *Config) AddIndirectQuery(v ssa.Value) {
 	c.IndirectQueries[v] = struct{}{}
 }
 
-// AddExtendedQuery adds an extended, AST-based query on v to the
-// analysis. The query, which must be a single Go expression, allows
-// destructuring the value.
-//
-// The query must operate on a variable named 'x', which represents
-// the value, and result in a pointer-like object. Only a subset of
-// Go expressions are permitted in queries, namely channel receives,
-// pointer dereferences, field selectors, array/slice/map/tuple
-// indexing and grouping with parentheses. The specific indices when
-// indexing arrays, slices and maps have no significance. Indices used
-// on tuples must be numeric and within bounds.
-//
-// All field selectors must be explicit, even ones usually elided
-// due to promotion of embedded fields.
-//
-// The query 'x' is identical to using AddQuery. The query '*x' is
-// identical to using AddIndirectQuery.
-//
-// On success, AddExtendedQuery returns a Pointer to the queried
-// value. This Pointer will be initialized during analysis. Using it
-// before analysis has finished has undefined behavior.
-//
-// Example:
-//
-//	// given v, which represents a function call to 'fn() (int, []*T)', and
-//	// 'type T struct { F *int }', the following query will access the field F.
-//	c.AddExtendedQuery(v, "x[1][0].F")
-func (c *Config) AddExtendedQuery(v ssa.Value, query string) (*Pointer, error) {
-	ops, _, err := parseExtendedQuery(v.Type(), query)
-	if err != nil {
-		return nil, fmt.Errorf("invalid query %q: %s", query, err)
-	}
-	if c.extendedQueries == nil {
-		c.extendedQueries = make(map[ssa.Value][]*extendedQuery)
-	}
-
-	ptr := &Pointer{}
-	c.extendedQueries[v] = append(c.extendedQueries[v], &extendedQuery{ops: ops, ptr: ptr})
-	return ptr, nil
-}
-
 func (c *Config) prog() *ssa.Program {
 	for _, main := range c.Mains {
 		return main.Prog
@@ -165,6 +122,7 @@ type Warning struct {
 // A Result contains the results of a pointer analysis.
 //
 // See Config for how to request the various Result components.
+//
 type Result struct {
 	CallGraph       *callgraph.Graph      // discovered call graph
 	Queries         map[ssa.Value]Pointer // pts(v) for each v in Config.Queries.
@@ -176,6 +134,7 @@ type Result struct {
 //
 // A Pointer doesn't have a unique type because pointers of distinct
 // types may alias the same object.
+//
 type Pointer struct {
 	a *analysis
 	n nodeid
@@ -226,17 +185,18 @@ func (s PointsToSet) Labels() []*Label {
 // map value is the PointsToSet for pointers of that type.
 //
 // The result is empty unless CanHaveDynamicTypes(T).
+//
 func (s PointsToSet) DynamicTypes() *typeutil.Map {
 	var tmap typeutil.Map
 	tmap.SetHasher(s.a.hasher)
 	if s.pts != nil {
 		var space [50]int
 		for _, x := range s.pts.AppendTo(space[:0]) {
-			ifaceObjID := nodeid(x)
-			if !s.a.isTaggedObject(ifaceObjID) {
+			ifaceObjId := nodeid(x)
+			if !s.a.isTaggedObject(ifaceObjId) {
 				continue // !CanHaveDynamicTypes(tDyn)
 			}
-			tDyn, v, indirect := s.a.taggedValue(ifaceObjID)
+			tDyn, v, indirect := s.a.taggedValue(ifaceObjId)
 			if indirect {
 				panic("indirect tagged object") // implement later
 			}
@@ -253,13 +213,13 @@ func (s PointsToSet) DynamicTypes() *typeutil.Map {
 
 // Intersects reports whether this points-to set and the
 // argument points-to set contain common members.
-func (s PointsToSet) Intersects(y PointsToSet) bool {
-	if s.pts == nil || y.pts == nil {
+func (x PointsToSet) Intersects(y PointsToSet) bool {
+	if x.pts == nil || y.pts == nil {
 		return false
 	}
 	// This takes Θ(|x|+|y|) time.
 	var z intsets.Sparse
-	z.Intersection(&s.pts.Sparse, &y.pts.Sparse)
+	z.Intersection(&x.pts.Sparse, &y.pts.Sparse)
 	return !z.IsEmpty()
 }
 

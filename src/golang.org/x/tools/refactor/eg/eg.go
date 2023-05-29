@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // Package eg implements the example-based refactoring tool whose
 // command-line is defined in golang.org/x/tools/cmd/eg.
 package eg // import "golang.org/x/tools/refactor/eg"
@@ -145,7 +147,6 @@ type Transformer struct {
 	env            map[string]ast.Expr                // maps parameter name to wildcard binding
 	importedObjs   map[types.Object]*ast.SelectorExpr // objects imported by after().
 	before, after  ast.Expr
-	afterStmts     []ast.Stmt
 	allowWildcards bool
 
 	// Working state of Transform():
@@ -157,6 +158,7 @@ type Transformer struct {
 // a single-file package containing "before" and "after" functions as
 // described in the package documentation.
 // tmplInfo is the type information for tmplFile.
+//
 func NewTransformer(fset *token.FileSet, tmplPkg *types.Package, tmplFile *ast.File, tmplInfo *types.Info, verbose bool) (*Transformer, error) {
 	// Check the template.
 	beforeSig := funcSig(tmplPkg, "before")
@@ -179,6 +181,7 @@ func NewTransformer(fset *token.FileSet, tmplPkg *types.Package, tmplFile *ast.F
 			// Dot imports are currently forbidden.  We
 			// make the simplifying assumption that all
 			// imports are regular, without local renames.
+			// TODO(adonovan): document
 			return nil, fmt.Errorf("dot-import (of %s) in template", imp.Path.Value)
 		}
 	}
@@ -198,7 +201,7 @@ func NewTransformer(fset *token.FileSet, tmplPkg *types.Package, tmplFile *ast.F
 	if err != nil {
 		return nil, fmt.Errorf("before: %s", err)
 	}
-	afterStmts, after, err := stmtAndExpr(afterDecl)
+	after, err := soleExpr(afterDecl)
 	if err != nil {
 		return nil, fmt.Errorf("after: %s", err)
 	}
@@ -242,7 +245,6 @@ func NewTransformer(fset *token.FileSet, tmplPkg *types.Package, tmplFile *ast.F
 		importedObjs:   make(map[types.Object]*ast.SelectorExpr),
 		before:         before,
 		after:          after,
-		afterStmts:     afterStmts,
 	}
 
 	// Combine type info from the template and input packages, and
@@ -280,7 +282,6 @@ func WriteAST(fset *token.FileSet, filename string, f *ast.File) (err error) {
 	if err != nil {
 		return err
 	}
-
 	defer func() {
 		if err2 := fh.Close(); err != nil {
 			err = err2 // prefer earlier error
@@ -319,33 +320,6 @@ func soleExpr(fn *ast.FuncDecl) (ast.Expr, error) {
 	}
 
 	return nil, fmt.Errorf("must contain a single return or expression statement")
-}
-
-// stmtAndExpr returns the expression in the last return statement as well as the preceding lines.
-func stmtAndExpr(fn *ast.FuncDecl) ([]ast.Stmt, ast.Expr, error) {
-	if fn.Body == nil {
-		return nil, nil, fmt.Errorf("no body")
-	}
-
-	n := len(fn.Body.List)
-	if n == 0 {
-		return nil, nil, fmt.Errorf("must contain at least one statement")
-	}
-
-	stmts, last := fn.Body.List[:n-1], fn.Body.List[n-1]
-
-	switch last := last.(type) {
-	case *ast.ReturnStmt:
-		if len(last.Results) != 1 {
-			return nil, nil, fmt.Errorf("return statement must have a single operand")
-		}
-		return stmts, last.Results[0], nil
-
-	case *ast.ExprStmt:
-		return stmts, last.X, nil
-	}
-
-	return nil, nil, fmt.Errorf("must end with a single return or expression statement")
 }
 
 // mergeTypeInfo adds type info from src to dst.

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // Package satisfy inspects the type-checked ASTs of Go packages and
 // reports the set of discovered type constraints of the form (lhs, rhs
 // Type) where lhs is a non-trivial interface, rhs satisfies this
@@ -10,7 +12,11 @@
 //
 // THIS PACKAGE IS EXPERIMENTAL AND MAY CHANGE AT ANY TIME.
 //
-// It is provided only for the gopls tool. It requires well-typed inputs.
+// It is provided only for the gorename tool.  Ideally this
+// functionality will become part of the type-checker in due course,
+// since it is computing it anyway, and it is robust for ill-typed
+// inputs, which this package is not.
+//
 package satisfy // import "golang.org/x/tools/refactor/satisfy"
 
 // NOTES:
@@ -21,6 +27,9 @@ package satisfy // import "golang.org/x/tools/refactor/satisfy"
 //   const x = len([1]func(){func() {
 //     ...
 //   }})
+//
+// TODO(adonovan): make this robust against ill-typed input.
+// Or move it into the type-checker.
 //
 // Assignability conversions are possible in the following places:
 // - in assignments y = x, y := x, var y = x.
@@ -45,15 +54,11 @@ import (
 
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/types/typeutil"
-	"golang.org/x/tools/internal/typeparams"
 )
 
 // A Constraint records the fact that the RHS type does and must
-// satisfy the LHS type, which is an interface.
+// satisify the LHS type, which is an interface.
 // The names are suggestive of an assignment statement LHS = RHS.
-//
-// The constraint is implicitly universally quantified over any type
-// parameters appearing within the two types.
 type Constraint struct {
 	LHS, RHS types.Type
 }
@@ -66,6 +71,7 @@ type Constraint struct {
 // that is checked during compilation of a package.  Refactoring tools
 // will need to preserve at least this part of the relation to ensure
 // continued compilation.
+//
 type Finder struct {
 	Result    map[Constraint]bool
 	msetcache typeutil.MethodSetCache
@@ -84,6 +90,7 @@ type Finder struct {
 // The package must be free of type errors, and
 // info.{Defs,Uses,Selections,Types} must have been populated by the
 // type-checker.
+//
 func (f *Finder) Find(info *types.Info, files []*ast.File) {
 	if f.Result == nil {
 		f.Result = make(map[Constraint]bool)
@@ -127,13 +134,13 @@ func (f *Finder) exprN(e ast.Expr) types.Type {
 
 	case *ast.CallExpr:
 		// x, err := f(args)
-		sig := coreType(f.expr(e.Fun)).(*types.Signature)
+		sig := f.expr(e.Fun).Underlying().(*types.Signature)
 		f.call(sig, e.Args)
 
 	case *ast.IndexExpr:
 		// y, ok := x[i]
 		x := f.expr(e.X)
-		f.assign(f.expr(e.Index), coreType(x).(*types.Map).Key())
+		f.assign(f.expr(e.Index), x.Underlying().(*types.Map).Key())
 
 	case *ast.TypeAssertExpr:
 		// y, ok := x.(T)
@@ -198,8 +205,7 @@ func (f *Finder) call(sig *types.Signature, args []ast.Expr) {
 	}
 }
 
-// builtin visits the arguments of a builtin type with signature sig.
-func (f *Finder) builtin(obj *types.Builtin, sig *types.Signature, args []ast.Expr) {
+func (f *Finder) builtin(obj *types.Builtin, sig *types.Signature, args []ast.Expr, T types.Type) types.Type {
 	switch obj.Name() {
 	case "make", "new":
 		// skip the type operand
@@ -214,7 +220,7 @@ func (f *Finder) builtin(obj *types.Builtin, sig *types.Signature, args []ast.Ex
 			f.expr(args[1])
 		} else {
 			// append(x, y, z)
-			tElem := coreType(s).(*types.Slice).Elem()
+			tElem := s.Underlying().(*types.Slice).Elem()
 			for _, arg := range args[1:] {
 				f.assign(tElem, f.expr(arg))
 			}
@@ -223,12 +229,14 @@ func (f *Finder) builtin(obj *types.Builtin, sig *types.Signature, args []ast.Ex
 	case "delete":
 		m := f.expr(args[0])
 		k := f.expr(args[1])
-		f.assign(coreType(m).(*types.Map).Key(), k)
+		f.assign(m.Underlying().(*types.Map).Key(), k)
 
 	default:
 		// ordinary call
 		f.call(sig, args)
 	}
+
+	return T
 }
 
 func (f *Finder) extract(tuple types.Type, i int) types.Type {
@@ -270,6 +278,7 @@ func (f *Finder) valueSpec(spec *ast.ValueSpec) {
 // explicit conversions and comparisons between two types, unless the
 // types are uninteresting (e.g. lhs is a concrete type, or the empty
 // interface; rhs has no methods).
+//
 func (f *Finder) assign(lhs, rhs types.Type) {
 	if types.Identical(lhs, rhs) {
 		return
@@ -355,7 +364,6 @@ func (f *Finder) expr(e ast.Expr) types.Type {
 		f.sig = saved
 
 	case *ast.CompositeLit:
-		// No need for coreType here: go1.18 disallows P{...} for type param P.
 		switch T := deref(tv.Type).Underlying().(type) {
 		case *types.Struct:
 			for i, elem := range e.Elts {
@@ -401,19 +409,11 @@ func (f *Finder) expr(e ast.Expr) types.Type {
 		}
 
 	case *ast.IndexExpr:
-		if instance(f.info, e.X) {
-			// f[T] or C[T] -- generic instantiation
-		} else {
-			// x[i] or m[k] -- index or lookup operation
-			x := f.expr(e.X)
-			i := f.expr(e.Index)
-			if ux, ok := coreType(x).(*types.Map); ok {
-				f.assign(ux.Key(), i)
-			}
+		x := f.expr(e.X)
+		i := f.expr(e.Index)
+		if ux, ok := x.Underlying().(*types.Map); ok {
+			f.assign(ux.Key(), i)
 		}
-
-	case *typeparams.IndexListExpr:
-		// f[X, Y] -- generic instantiation
 
 	case *ast.SliceExpr:
 		f.expr(e.X)
@@ -438,29 +438,14 @@ func (f *Finder) expr(e ast.Expr) types.Type {
 			f.assign(tvFun.Type, arg0)
 		} else {
 			// function call
-
-			// unsafe call. Treat calls to functions in unsafe like ordinary calls,
-			// except that their signature cannot be determined by their func obj.
-			// Without this special handling, f.expr(e.Fun) would fail below.
-			if s, ok := unparen(e.Fun).(*ast.SelectorExpr); ok {
-				if obj, ok := f.info.Uses[s.Sel].(*types.Builtin); ok && obj.Pkg().Path() == "unsafe" {
-					sig := f.info.Types[e.Fun].Type.(*types.Signature)
-					f.call(sig, e.Args)
-					return tv.Type
-				}
-			}
-
-			// builtin call
 			if id, ok := unparen(e.Fun).(*ast.Ident); ok {
 				if obj, ok := f.info.Uses[id].(*types.Builtin); ok {
 					sig := f.info.Types[id].Type.(*types.Signature)
-					f.builtin(obj, sig, e.Args)
-					return tv.Type
+					return f.builtin(obj, sig, e.Args, tv.Type)
 				}
 			}
-
 			// ordinary call
-			f.call(coreType(f.expr(e.Fun)).(*types.Signature), e.Args)
+			f.call(f.expr(e.Fun).Underlying().(*types.Signature), e.Args)
 		}
 
 	case *ast.StarExpr:
@@ -520,7 +505,7 @@ func (f *Finder) stmt(s ast.Stmt) {
 	case *ast.SendStmt:
 		ch := f.expr(s.Chan)
 		val := f.expr(s.Value)
-		f.assign(coreType(ch).(*types.Chan).Elem(), val)
+		f.assign(ch.Underlying().(*types.Chan).Elem(), val)
 
 	case *ast.IncDecStmt:
 		f.expr(s.X)
@@ -668,35 +653,35 @@ func (f *Finder) stmt(s ast.Stmt) {
 			if s.Key != nil {
 				k := f.expr(s.Key)
 				var xelem types.Type
-				// Keys of array, *array, slice, string aren't interesting
-				// since the RHS key type is just an int.
-				switch ux := coreType(x).(type) {
+				// keys of array, *array, slice, string aren't interesting
+				switch ux := x.Underlying().(type) {
 				case *types.Chan:
 					xelem = ux.Elem()
 				case *types.Map:
 					xelem = ux.Key()
 				}
 				if xelem != nil {
-					f.assign(k, xelem)
+					f.assign(xelem, k)
 				}
 			}
 			if s.Value != nil {
 				val := f.expr(s.Value)
 				var xelem types.Type
-				// Values of type strings aren't interesting because
-				// the RHS value type is just a rune.
-				switch ux := coreType(x).(type) {
+				// values of strings aren't interesting
+				switch ux := x.Underlying().(type) {
 				case *types.Array:
+					xelem = ux.Elem()
+				case *types.Chan:
 					xelem = ux.Elem()
 				case *types.Map:
 					xelem = ux.Elem()
 				case *types.Pointer: // *array
-					xelem = coreType(deref(ux)).(*types.Array).Elem()
+					xelem = deref(ux).(*types.Array).Elem()
 				case *types.Slice:
 					xelem = ux.Elem()
 				}
 				if xelem != nil {
-					f.assign(val, xelem)
+					f.assign(xelem, val)
 				}
 			}
 		}
@@ -711,7 +696,7 @@ func (f *Finder) stmt(s ast.Stmt) {
 
 // deref returns a pointer's element type; otherwise it returns typ.
 func deref(typ types.Type) types.Type {
-	if p, ok := coreType(typ).(*types.Pointer); ok {
+	if p, ok := typ.Underlying().(*types.Pointer); ok {
 		return p.Elem()
 	}
 	return typ
@@ -720,19 +705,3 @@ func deref(typ types.Type) types.Type {
 func unparen(e ast.Expr) ast.Expr { return astutil.Unparen(e) }
 
 func isInterface(T types.Type) bool { return types.IsInterface(T) }
-
-func coreType(T types.Type) types.Type { return typeparams.CoreType(T) }
-
-func instance(info *types.Info, expr ast.Expr) bool {
-	var id *ast.Ident
-	switch x := expr.(type) {
-	case *ast.Ident:
-		id = x
-	case *ast.SelectorExpr:
-		id = x.Sel
-	default:
-		return false
-	}
-	_, ok := typeparams.GetInstances(info)[id]
-	return ok
-}

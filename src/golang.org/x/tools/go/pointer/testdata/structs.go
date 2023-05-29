@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -13,12 +12,12 @@ type A struct {
 }
 
 func (a A) m1() {
-	print(a.f) // @pointsto command-line-arguments.p
+	print(a.f) // @pointsto main.p
 }
 
 func (a *A) m2() {
 	print(a)   // @pointsto complit.A@struct1s:9
-	print(a.f) // @pointsto command-line-arguments.p
+	print(a.f) // @pointsto main.p
 }
 
 type B struct {
@@ -33,21 +32,21 @@ func structs1() {
 	b.f = &p
 	b.g = b
 
-	print(b.h) // @pointsto command-line-arguments.q
-	print(b.f) // @pointsto command-line-arguments.p
+	print(b.h) // @pointsto main.q
+	print(b.f) // @pointsto main.p
 	print(b.g) // @types *B
 
 	ptr := &b.f
-	print(*ptr) // @pointsto command-line-arguments.p
+	print(*ptr) // @pointsto main.p
 
 	b.m1()
 	b.m2()
 }
 
-// @calls command-line-arguments.structs1 -> (command-line-arguments.A).m1
-// @calls command-line-arguments.structs1 -> (*command-line-arguments.A).m2
-// @calls (*command-line-arguments.B).m1 -> (command-line-arguments.A).m1
-// @calls (*command-line-arguments.B).m2 -> (*command-line-arguments.A).m2
+// @calls main.structs1 -> (main.A).m1
+// @calls main.structs1 -> (*main.A).m2
+// @calls (*main.B).m1 -> (main.A).m1
+// @calls (*main.B).m2 -> (*main.A).m2
 
 type T struct {
 	x int

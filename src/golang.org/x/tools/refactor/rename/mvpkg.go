@@ -1,6 +1,6 @@
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// licence that can be found in the LICENSE file.
 
 // This file contains the implementation of the 'gomvpkg' command
 // whose main function is in golang.org/x/tools/cmd/gomvpkg.
@@ -9,6 +9,7 @@ package rename
 
 // TODO(matloob):
 // - think about what happens if the package is moving across version control systems.
+// - think about windows, which uses "\" as its directory separator.
 // - dot imports are not supported. Make sure it's clearly documented.
 
 import (
@@ -18,9 +19,9 @@ import (
 	"go/build"
 	"go/format"
 	"go/token"
-	exec "golang.org/x/sys/execabs"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -51,6 +52,7 @@ func Move(ctxt *build.Context, from, to, moveTmpl string) error {
 
 	// This should be the only place in the program that constructs
 	// file paths.
+	// TODO(matloob): test on Microsoft Windows.
 	fromDir := buildutil.JoinPath(ctxt, srcDir, filepath.FromSlash(from))
 	toDir := buildutil.JoinPath(ctxt, srcDir, filepath.FromSlash(to))
 	toParent := filepath.Dir(toDir)
@@ -59,7 +61,7 @@ func Move(ctxt *build.Context, from, to, moveTmpl string) error {
 	}
 
 	// Build the import graph and figure out which packages to update.
-	_, rev, errors := importgraph.Build(ctxt)
+	fwd, rev, errors := importgraph.Build(ctxt)
 	if len(errors) > 0 {
 		// With a large GOPATH tree, errors are inevitable.
 		// Report them but proceed.
@@ -72,12 +74,14 @@ func Move(ctxt *build.Context, from, to, moveTmpl string) error {
 	// Determine the affected packages---the set of packages whose import
 	// statements need updating.
 	affectedPackages := map[string]bool{from: true}
-	destinations := make(map[string]string) // maps old import path to new import path
+	destinations := map[string]string{} // maps old dir to new dir
 	for pkg := range subpackages(ctxt, srcDir, from) {
 		for r := range rev[pkg] {
 			affectedPackages[r] = true
 		}
-		destinations[pkg] = strings.Replace(pkg, from, to, 1)
+		destinations[pkg] = strings.Replace(pkg,
+			// Ensure directories have a trailing "/".
+			filepath.Join(from, ""), filepath.Join(to, ""), 1)
 	}
 
 	// Load all the affected packages.
@@ -96,6 +100,7 @@ func Move(ctxt *build.Context, from, to, moveTmpl string) error {
 
 	m := mover{
 		ctxt:             ctxt,
+		fwd:              fwd,
 		rev:              rev,
 		iprog:            iprog,
 		from:             from,
@@ -128,17 +133,17 @@ func srcDir(ctxt *build.Context, pkg string) (string, error) {
 }
 
 // subpackages returns the set of packages in the given srcDir whose
-// import path equals to root, or has "root/" as the prefix.
-func subpackages(ctxt *build.Context, srcDir string, root string) map[string]bool {
-	var subs = make(map[string]bool)
+// import paths start with dir.
+func subpackages(ctxt *build.Context, srcDir string, dir string) map[string]bool {
+	subs := map[string]bool{dir: true}
+
+	// Find all packages under srcDir whose import paths start with dir.
 	buildutil.ForEachPackage(ctxt, func(pkg string, err error) {
 		if err != nil {
 			log.Fatalf("unexpected error in ForEachPackage: %v", err)
 		}
 
-		// Only process the package root, or a sub-package of it.
-		if !(strings.HasPrefix(pkg, root) &&
-			(len(pkg) == len(root) || pkg[len(root)] == '/')) {
+		if !strings.HasPrefix(pkg, path.Join(dir, "")) {
 			return
 		}
 
@@ -155,6 +160,7 @@ func subpackages(ctxt *build.Context, srcDir string, root string) map[string]boo
 
 		subs[pkg] = true
 	})
+
 	return subs
 }
 
@@ -163,8 +169,8 @@ type mover struct {
 	// with new package names or import paths.
 	iprog *loader.Program
 	ctxt  *build.Context
-	// rev is the reverse import graph.
-	rev importgraph.Graph
+	// fwd and rev are the forward and reverse import graphs
+	fwd, rev importgraph.Graph
 	// from and to are the source and destination import
 	// paths. fromDir and toDir are the source and destination
 	// absolute paths that package source files will be moved between.

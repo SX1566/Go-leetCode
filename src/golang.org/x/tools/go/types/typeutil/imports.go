@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package typeutil
 
 import "go/types"
@@ -12,6 +14,7 @@ import "go/types"
 // package Q, Q appears earlier than P in the result.
 // The algorithm follows import statements in the order they
 // appear in the source code, so the result is a total order.
+//
 func Dependencies(pkgs ...*types.Package) []*types.Package {
 	var result []*types.Package
 	seen := make(map[*types.Package]bool)

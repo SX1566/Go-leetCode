@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package ssa
 
 // An optional pass for sanity-checking invariants of the SSA representation.
@@ -30,6 +32,7 @@ type sanity struct {
 //
 // Sanity-checking is intended to facilitate the debugging of code
 // transformation passes.
+//
 func sanityCheck(fn *Function, reporter io.Writer) bool {
 	if reporter == nil {
 		reporter = os.Stderr
@@ -39,6 +42,7 @@ func sanityCheck(fn *Function, reporter io.Writer) bool {
 
 // mustSanityCheck is like sanityCheck but panics instead of returning
 // a negative result.
+//
 func mustSanityCheck(fn *Function, reporter io.Writer) {
 	if !sanityCheck(fn, reporter) {
 		fn.WriteTo(os.Stderr)
@@ -130,11 +134,10 @@ func (s *sanity) checkInstr(idx int, instr Instruction) {
 	case *Call:
 	case *ChangeInterface:
 	case *ChangeType:
-	case *SliceToArrayPointer:
 	case *Convert:
-		if from := instr.X.Type(); !isBasicConvTypes(typeSetOf(from)) {
-			if to := instr.Type(); !isBasicConvTypes(typeSetOf(to)) {
-				s.errorf("convert %s -> %s: at least one type must be basic (or all basic, []byte, or []rune)", from, to)
+		if _, ok := instr.X.Type().Underlying().(*types.Basic); !ok {
+			if _, ok := instr.Type().Underlying().(*types.Basic); !ok {
+				s.errorf("convert %s -> %s: at least one type must be basic", instr.X.Type(), instr.Type())
 			}
 		}
 
@@ -208,7 +211,7 @@ func (s *sanity) checkInstr(idx int, instr Instruction) {
 	// enclosing Function or Package.
 }
 
-func (s *sanity) checkFinalInstr(instr Instruction) {
+func (s *sanity) checkFinalInstr(idx int, instr Instruction) {
 	switch instr := instr.(type) {
 	case *If:
 		if nsuccs := len(s.block.Succs); nsuccs != 2 {
@@ -323,7 +326,7 @@ func (s *sanity) checkBlock(b *BasicBlock, index int) {
 		if j < n-1 {
 			s.checkInstr(j, instr)
 		} else {
-			s.checkFinalInstr(instr)
+			s.checkFinalInstr(j, instr)
 		}
 
 		// Check Instruction.Operands.
@@ -350,9 +353,7 @@ func (s *sanity) checkBlock(b *BasicBlock, index int) {
 			// Check that Operands that are also Instructions belong to same function.
 			// TODO(adonovan): also check their block dominates block b.
 			if val, ok := val.(Instruction); ok {
-				if val.Block() == nil {
-					s.errorf("operand %d of %s is an instruction (%s) that belongs to no block", i, instr, val)
-				} else if val.Parent() != s.fn {
+				if val.Parent() != s.fn {
 					s.errorf("operand %d of %s is an instruction (%s) from function %s", i, instr, val, val.Parent())
 				}
 			}
@@ -402,15 +403,13 @@ func (s *sanity) checkFunction(fn *Function) bool {
 	// - check params match signature
 	// - check transient fields are nil
 	// - warn if any fn.Locals do not appear among block instructions.
-
-	// TODO(taking): Sanity check origin, typeparams, and typeargs.
 	s.fn = fn
 	if fn.Prog == nil {
 		s.errorf("nil Prog")
 	}
 
-	_ = fn.String()               // must not crash
-	_ = fn.RelString(fn.relPkg()) // must not crash
+	fn.String()            // must not crash
+	fn.RelString(fn.pkg()) // must not crash
 
 	// All functions have a package, except delegates (which are
 	// shared across packages, or duplicated as weak symbols in a
@@ -419,23 +418,14 @@ func (s *sanity) checkFunction(fn *Function) bool {
 		if strings.HasPrefix(fn.Synthetic, "wrapper ") ||
 			strings.HasPrefix(fn.Synthetic, "bound ") ||
 			strings.HasPrefix(fn.Synthetic, "thunk ") ||
-			strings.HasSuffix(fn.name, "Error") ||
-			strings.HasPrefix(fn.Synthetic, "instance ") ||
-			strings.HasPrefix(fn.Synthetic, "instantiation ") ||
-			(fn.parent != nil && len(fn.typeargs) > 0) /* anon fun in instance */ {
+			strings.HasSuffix(fn.name, "Error") {
 			// ok
 		} else {
 			s.errorf("nil Pkg")
 		}
 	}
 	if src, syn := fn.Synthetic == "", fn.Syntax() != nil; src != syn {
-		if len(fn.typeargs) > 0 && fn.Prog.mode&InstantiateGenerics != 0 {
-			// ok (instantiation with InstantiateGenerics on)
-		} else if fn.topLevelOrigin != nil && len(fn.typeargs) > 0 {
-			// ok (we always have the syntax set for instantiation)
-		} else {
-			s.errorf("got fromSource=%t, hasSyntax=%t; want same values", src, syn)
-		}
+		s.errorf("got fromSource=%t, hasSyntax=%t; want same values", src, syn)
 	}
 	for i, l := range fn.Locals {
 		if l.Parent() != fn {
@@ -455,17 +445,6 @@ func (s *sanity) checkFunction(fn *Function) bool {
 	for i, p := range fn.Params {
 		if p.Parent() != fn {
 			s.errorf("Param %s at index %d has wrong parent", p.Name(), i)
-		}
-		// Check common suffix of Signature and Params match type.
-		if sig := fn.Signature; sig != nil {
-			j := i - len(fn.Params) + sig.Params().Len() // index within sig.Params
-			if j < 0 {
-				continue
-			}
-			if !types.Identical(p.Type(), sig.Params().At(j).Type()) {
-				s.errorf("Param %s at index %d has wrong type (%s, versus %s in Signature)", p.Name(), i, p.Type(), sig.Params().At(j).Type())
-
-			}
 		}
 		s.checkReferrerList(p)
 	}
@@ -497,9 +476,6 @@ func (s *sanity) checkFunction(fn *Function) bool {
 		if anon.Parent() != fn {
 			s.errorf("AnonFuncs[%d]=%s but %s.Parent()=%s", i, anon, anon, anon.Parent())
 		}
-		if i != int(anon.anonIdx) {
-			s.errorf("AnonFuncs[%d]=%s but %s.anonIdx=%d", i, anon, anon, anon.anonIdx)
-		}
 	}
 	s.fn = nil
 	return !s.insane
@@ -512,7 +488,7 @@ func sanityCheckPackage(pkg *Package) {
 	if pkg.Pkg == nil {
 		panic(fmt.Sprintf("Package %s has no Object", pkg))
 	}
-	_ = pkg.String() // must not crash
+	pkg.String() // must not crash
 
 	for name, mem := range pkg.Members {
 		if name != mem.Name() {

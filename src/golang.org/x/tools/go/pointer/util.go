@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package pointer
 
 import (
@@ -10,10 +12,9 @@ import (
 	"go/types"
 	"log"
 	"os"
+	"os/exec"
 	"runtime"
 	"time"
-
-	exec "golang.org/x/sys/execabs"
 
 	"golang.org/x/tools/container/intsets"
 )
@@ -27,6 +28,7 @@ func CanPoint(T types.Type) bool {
 			return true // treat reflect.Value like interface{}
 		}
 		return CanPoint(T.Underlying())
+
 	case *types.Pointer, *types.Interface, *types.Map, *types.Chan, *types.Signature, *types.Slice:
 		return true
 	}
@@ -36,6 +38,7 @@ func CanPoint(T types.Type) bool {
 
 // CanHaveDynamicTypes reports whether the type T can "hold" dynamic types,
 // i.e. is an interface (incl. reflect.Type) or a reflect.Value.
+//
 func CanHaveDynamicTypes(T types.Type) bool {
 	switch T := T.(type) {
 	case *types.Named:
@@ -69,21 +72,17 @@ func deref(typ types.Type) types.Type {
 // of a type T: the subelement's type and its path from the root of T.
 //
 // For example, for this type:
-//
-//	type line struct{ points []struct{x, y int} }
-//
+//     type line struct{ points []struct{x, y int} }
 // flatten() of the inner struct yields the following []fieldInfo:
-//
-//	struct{ x, y int }                      ""
-//	int                                     ".x"
-//	int                                     ".y"
-//
+//    struct{ x, y int }                      ""
+//    int                                     ".x"
+//    int                                     ".y"
 // and flatten(line) yields:
+//    struct{ points []struct{x, y int} }     ""
+//    struct{ x, y int }                      ".points[*]"
+//    int                                     ".points[*].x
+//    int                                     ".points[*].y"
 //
-//	struct{ points []struct{x, y int} }     ""
-//	struct{ x, y int }                      ".points[*]"
-//	int                                     ".points[*].x
-//	int                                     ".points[*].y"
 type fieldInfo struct {
 	typ types.Type
 
@@ -93,6 +92,7 @@ type fieldInfo struct {
 }
 
 // path returns a user-friendly string describing the subelement path.
+//
 func (fi *fieldInfo) path() string {
 	var buf bytes.Buffer
 	for p := fi; p != nil; p = p.tail {
@@ -116,6 +116,7 @@ func (fi *fieldInfo) path() string {
 // reflect.Value is considered pointerlike, similar to interface{}.
 //
 // Callers must not mutate the result.
+//
 func (a *analysis) flatten(t types.Type) []*fieldInfo {
 	fl, ok := a.flattenMemo[t]
 	if !ok {
@@ -126,7 +127,7 @@ func (a *analysis) flatten(t types.Type) []*fieldInfo {
 				// Debuggability hack: don't remove
 				// the named type from interfaces as
 				// they're very verbose.
-				fl = append(fl, &fieldInfo{typ: t}) // t may be a type param
+				fl = append(fl, &fieldInfo{typ: t})
 			} else {
 				fl = a.flatten(u)
 			}
@@ -172,7 +173,7 @@ func (a *analysis) flatten(t types.Type) []*fieldInfo {
 			}
 
 		default:
-			panic(fmt.Sprintf("cannot flatten unsupported type %T", t))
+			panic(t)
 		}
 
 		a.flattenMemo[t] = fl
@@ -279,8 +280,8 @@ func (ns *nodeset) add(n nodeid) bool {
 	return ns.Sparse.Insert(int(n))
 }
 
-func (ns *nodeset) addAll(y *nodeset) bool {
-	return ns.UnionWith(&y.Sparse)
+func (x *nodeset) addAll(y *nodeset) bool {
+	return x.UnionWith(&y.Sparse)
 }
 
 // Profiling & debugging -------------------------------------------------------

@@ -6,19 +6,7 @@
   <head>
     <title>{{.Title}}</title>
     <meta charset='utf-8'>
-    <script>
-      var notesEnabled = {{.NotesEnabled}};
-    </script>
     <script src='/static/slides.js'></script>
-
-    {{if .NotesEnabled}}
-    <script>
-      var sections = {{.Sections}};
-      var titleNotes = {{.TitleNotes}}
-    </script>
-    <script src='/static/notes.js'></script>
-    {{end}}
-
     <script>
       // Initialize Google Analytics tracking code on production site only.
       if (window["location"] && window["location"]["hostname"] == "talks.golang.org") {
@@ -41,7 +29,7 @@
   <body style='display: none'>
 
     <section class='slides layout-widescreen'>
-
+      
       <article>
         <h1>{{.Title}}</h1>
         {{with .Subtitle}}<h3>{{.}}</h3>{{end}}
@@ -52,19 +40,18 @@
           </div>
         {{end}}
       </article>
-
+      
   {{range $i, $s := .Sections}}
   <!-- start of slide {{$s.Number}} -->
-      <article {{$s.HTMLAttributes}}>
+      <article>
       {{if $s.Elem}}
         <h3>{{$s.Title}}</h3>
         {{range $s.Elem}}{{elem $.Template .}}{{end}}
       {{else}}
         <h2>{{$s.Title}}</h2>
       {{end}}
-      <span class="pagenumber">{{pagenum $s 1}}</span>
       </article>
-  <!-- end of slide {{$s.Number}} -->
+  <!-- end of slide {{$i}} -->
   {{end}}{{/* of Slide block */}}
 
       <article>

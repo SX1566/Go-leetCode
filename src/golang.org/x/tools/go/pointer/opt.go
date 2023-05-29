@@ -27,14 +27,15 @@ import "fmt"
 //
 // Renumbering makes the PTA log inscrutable.  To aid debugging, later
 // phases (e.g. HVN) must not rely on it having occurred.
+//
 func (a *analysis) renumber() {
 	if a.log != nil {
 		fmt.Fprintf(a.log, "\n\n==== Renumbering\n\n")
 	}
 
 	N := nodeid(len(a.nodes))
-	newNodes := make([]*node, N)
-	renumbering := make([]nodeid, N) // maps old to new
+	newNodes := make([]*node, N, N)
+	renumbering := make([]nodeid, N, N) // maps old to new
 
 	var i, j nodeid
 
@@ -100,13 +101,6 @@ func (a *analysis) renumber() {
 	for v, ptr := range a.result.IndirectQueries {
 		ptr.n = renumbering[ptr.n]
 		a.result.IndirectQueries[v] = ptr
-	}
-	for _, queries := range a.config.extendedQueries {
-		for _, query := range queries {
-			if query.ptr != nil {
-				query.ptr.n = renumbering[query.ptr.n]
-			}
-		}
 	}
 
 	// Renumber nodeids in global objects.

@@ -1,12 +1,6 @@
-// Copyright 2014 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 // Package static computes the call graph of a Go program containing
 // only static call edges.
 package static // import "golang.org/x/tools/go/callgraph/static"
-
-// TODO(zpavlinovic): update static for how it handles generic function bodies.
 
 import (
 	"golang.org/x/tools/go/callgraph"
@@ -16,6 +10,7 @@ import (
 
 // CallGraph computes the call graph of the specified program
 // considering only static calls.
+//
 func CallGraph(prog *ssa.Program) *callgraph.Graph {
 	cg := callgraph.New(nil) // TODO(adonovan) eliminate concept of rooted callgraph
 

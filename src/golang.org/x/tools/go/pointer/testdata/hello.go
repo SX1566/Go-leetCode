@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -13,7 +12,7 @@ type S int
 var theS S
 
 func (s *S) String() string {
-	print(s) // @pointsto command-line-arguments.theS
+	print(s) // @pointsto main.theS
 	return ""
 }
 
@@ -24,5 +23,5 @@ func main() {
 	fmt.Println("Hello, World!", &theS)
 }
 
-// @calls command-line-arguments.main               -> fmt.Println
-// @calls (*fmt.pp).handleMethods -> (*command-line-arguments.S).String
+// @calls main.main               -> fmt.Println
+// @calls (*fmt.pp).handleMethods -> (*main.S).String

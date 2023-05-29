@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package eg
 
 import (
 	"fmt"
 	"go/ast"
-	"go/constant"
 	"go/token"
 	"go/types"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"reflect"
 
 	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/exact"
 )
 
 // matchExpr reports whether pattern x matches y.
@@ -27,6 +29,7 @@ import (
 //
 // A wildcard appearing more than once in the pattern must
 // consistently match the same tree.
+//
 func (tr *Transformer) matchExpr(x, y ast.Expr) bool {
 	if x == nil && y == nil {
 		return true
@@ -66,9 +69,9 @@ func (tr *Transformer) matchExpr(x, y ast.Expr) bool {
 
 	case *ast.BasicLit:
 		y := y.(*ast.BasicLit)
-		xval := constant.MakeFromLiteral(x.Value, x.Kind, 0)
-		yval := constant.MakeFromLiteral(y.Value, y.Kind, 0)
-		return constant.Compare(xval, token.EQL, yval)
+		xval := exact.MakeFromLiteral(x.Value, x.Kind)
+		yval := exact.MakeFromLiteral(y.Value, y.Kind)
+		return exact.Compare(xval, token.EQL, yval)
 
 	case *ast.FuncLit:
 		// func literals (and thus statement syntax) never match.

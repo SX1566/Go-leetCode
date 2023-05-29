@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -32,6 +31,6 @@ func main() {
 	}
 	ex := recover()
 	print(ex)                 // @types myPanic | string | func(int) | func() string
-	print(ex.(func(int)))     // @pointsto command-line-arguments.f
-	print(ex.(func() string)) // @pointsto command-line-arguments.g
+	print(ex.(func(int)))     // @pointsto main.f
+	print(ex.(func() string)) // @pointsto main.g
 }

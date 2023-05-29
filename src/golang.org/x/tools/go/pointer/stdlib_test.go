@@ -4,7 +4,6 @@
 
 // Incomplete source tree on Android.
 
-//go:build !android
 // +build !android
 
 package pointer
@@ -19,11 +18,13 @@ package pointer
 
 import (
 	"flag"
+	"go/build"
 	"go/token"
 	"testing"
 	"time"
 
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/buildutil"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
 )
@@ -35,18 +36,22 @@ func TestStdlib(t *testing.T) {
 		t.Skip("skipping (slow) stdlib test (use --stdlib)")
 	}
 
-	cfg := &packages.Config{
-		Mode: packages.LoadAllSyntax,
-		// Create test main packages with a main function.
-		Tests: true,
+	// Load, parse and type-check the program.
+	ctxt := build.Default // copy
+	ctxt.GOPATH = ""      // disable GOPATH
+	conf := loader.Config{Build: &ctxt}
+	if _, err := conf.FromArgs(buildutil.AllPackages(conf.Build), true); err != nil {
+		t.Errorf("FromArgs failed: %v", err)
+		return
 	}
-	pkgs, err := packages.Load(cfg, "std")
-	if err != nil || packages.PrintErrors(pkgs) > 0 {
+
+	iprog, err := conf.Load()
+	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 
 	// Create SSA packages.
-	prog, _ := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
+	prog := ssautil.CreateProgram(iprog, 0)
 	prog.Build()
 
 	numPkgs := len(prog.AllPackages())
@@ -55,21 +60,20 @@ func TestStdlib(t *testing.T) {
 	}
 
 	// Determine the set of packages/tests to analyze.
-	var mains []*ssa.Package
-	for _, ssapkg := range prog.AllPackages() {
-		if ssapkg.Pkg.Name() == "main" && ssapkg.Func("main") != nil {
-			mains = append(mains, ssapkg)
-		}
+	var testPkgs []*ssa.Package
+	for _, info := range iprog.InitialPackages() {
+		testPkgs = append(testPkgs, prog.Package(info.Pkg))
 	}
-	if mains == nil {
-		t.Fatal("no tests found in analysis scope")
+	testmain := prog.CreateTestMainPackage(testPkgs...)
+	if testmain == nil {
+		t.Fatal("analysis scope has tests")
 	}
 
 	// Run the analysis.
 	config := &Config{
 		Reflection:     false, // TODO(adonovan): fix remaining bug in rVCallConstraint, then enable.
 		BuildCallGraph: true,
-		Mains:          mains,
+		Mains:          []*ssa.Package{testmain},
 	}
 	// TODO(adonovan): add some query values (affects track bits).
 

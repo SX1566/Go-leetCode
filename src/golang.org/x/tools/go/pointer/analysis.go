@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package pointer
 
 // This file defines the main datatypes and Analyze function of the pointer analysis.
@@ -16,7 +18,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
-	"strings"
 
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
@@ -47,6 +48,7 @@ const (
 //
 // (Note: most variables called 'obj' are not *objects but nodeids
 // such that a.nodes[obj].obj != nil.)
+//
 type object struct {
 	// flags is a bitset of the node type (ot*) flags defined above.
 	flags uint32
@@ -59,8 +61,8 @@ type object struct {
 	//
 	// ssa.Value	for an object allocated by an SSA operation.
 	// types.Type	for an rtype instance object or *rtype-tagged object.
-	// string	for an intrinsic object, e.g. the array behind os.Args.
-	// nil		for an object allocated by an intrinsic.
+	// string	for an instrinsic object, e.g. the array behind os.Args.
+	// nil		for an object allocated by an instrinsic.
 	//		(cgn provides the identity of the intrinsic.)
 	data interface{}
 
@@ -82,6 +84,7 @@ type nodeid uint32
 //
 // Nodes that are pointed-to locations ("labels") have an enclosing
 // object (see analysis.enclosingObject).
+//
 type node struct {
 	// If non-nil, this node is the start of an object
 	// (addressable memory location).
@@ -176,11 +179,6 @@ func (a *analysis) warnf(pos token.Pos, format string, args ...interface{}) {
 
 // computeTrackBits sets a.track to the necessary 'track' bits for the pointer queries.
 func (a *analysis) computeTrackBits() {
-	if len(a.config.extendedQueries) != 0 {
-		// TODO(dh): only track the types necessary for the query.
-		a.track = trackAll
-		return
-	}
 	var queryTypes []types.Type
 	for v := range a.config.Queries {
 		queryTypes = append(queryTypes, v.Type())
@@ -214,6 +212,7 @@ func (a *analysis) computeTrackBits() {
 //
 // Pointer analysis of a transitively closed well-typed program should
 // always succeed.  An error can occur only due to an internal bug.
+//
 func Analyze(config *Config) (result *Result, err error) {
 	if config.Mains == nil {
 		return nil, fmt.Errorf("no main/test packages to analyze (check $GOROOT/$GOPATH)")
@@ -359,6 +358,7 @@ func Analyze(config *Config) (result *Result, err error) {
 
 // callEdge is called for each edge in the callgraph.
 // calleeid is the callee's object node (has otFunction flag).
+//
 func (a *analysis) callEdge(caller *cgnode, site *callsite, calleeid nodeid) {
 	obj := a.nodes[calleeid].obj
 	if obj.flags&otFunction == 0 {
@@ -378,25 +378,10 @@ func (a *analysis) callEdge(caller *cgnode, site *callsite, calleeid nodeid) {
 		fmt.Fprintf(a.log, "\tcall edge %s -> %s\n", site, callee)
 	}
 
-	// Warn about calls to functions that are handled unsoundly.
-	// TODO(adonovan): de-dup these messages.
-	fn := callee.fn
-
 	// Warn about calls to non-intrinsic external functions.
-	if fn.Blocks == nil && a.findIntrinsic(fn) == nil {
+	// TODO(adonovan): de-dup these messages.
+	if fn := callee.fn; fn.Blocks == nil && a.findIntrinsic(fn) == nil {
 		a.warnf(site.pos(), "unsound call to unknown intrinsic: %s", fn)
-		a.warnf(fn.Pos(), " (declared here)")
-	}
-
-	// Warn about calls to generic function bodies.
-	if fn.TypeParams().Len() > 0 && len(fn.TypeArgs()) == 0 {
-		a.warnf(site.pos(), "unsound call to generic function body: %s (build with ssa.InstantiateGenerics)", fn)
-		a.warnf(fn.Pos(), " (declared here)")
-	}
-
-	// Warn about calls to instantiation wrappers of generics functions.
-	if fn.Origin() != nil && strings.HasPrefix(fn.Synthetic, "instantiation wrapper ") {
-		a.warnf(site.pos(), "unsound call to instantiation wrapper of generic: %s (build with ssa.InstantiateGenerics)", fn)
 		a.warnf(fn.Pos(), " (declared here)")
 	}
 }
@@ -406,6 +391,7 @@ func (a *analysis) callEdge(caller *cgnode, site *callsite, calleeid nodeid) {
 // It only dumps the nodes that existed before solving.  The order in
 // which solver-created nodes are created depends on pre-solver
 // optimization, so we can't include them in the cross-check.
+//
 func (a *analysis) dumpSolution(filename string, N int) {
 	f, err := os.Create(filename)
 	if err != nil {
@@ -433,6 +419,7 @@ func (a *analysis) dumpSolution(filename string, N int) {
 // showCounts logs the size of the constraint system.  A typical
 // optimized distribution is 65% copy, 13% load, 11% addr, 5%
 // offsetAddr, 4% store, 2% others.
+//
 func (a *analysis) showCounts() {
 	if a.log != nil {
 		counts := make(map[reflect.Type]int)

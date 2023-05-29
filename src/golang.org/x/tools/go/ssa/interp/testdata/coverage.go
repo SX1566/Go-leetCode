@@ -9,7 +9,6 @@ package main
 import (
 	"fmt"
 	"reflect"
-	"strings"
 )
 
 func init() {
@@ -172,7 +171,7 @@ func main() {
 
 	// fmt.
 	const message = "Hello, World!"
-	if fmt.Sprint("Hello", ", ", "World", "!") != message {
+	if fmt.Sprintf("%s, %s!", "Hello", "World") != message {
 		panic("oops")
 	}
 
@@ -426,7 +425,7 @@ func init() {
 	// But two slices cannot be compared, even if one is nil.
 	defer func() {
 		r := fmt.Sprint(recover())
-		if !(strings.Contains(r, "compar") && strings.Contains(r, "[]string")) {
+		if r != "runtime error: comparing uncomparable type []string" {
 			panic("want panic from slice comparison, got " + r)
 		}
 	}()
@@ -436,7 +435,7 @@ func init() {
 func init() {
 	// Regression test for SSA renaming bug.
 	var ints []int
-	for range "foo" {
+	for _ = range "foo" {
 		var x int
 		x++
 		ints = append(ints, x)
@@ -509,7 +508,7 @@ func init() {
 		r := fmt.Sprint(recover())
 		// Exact error varies by toolchain:
 		if r != "runtime error: value method (main.T).f called using nil *main.T pointer" &&
-			r != "value method (main.T).f called using nil *main.T pointer" {
+			r != "value method main.T.f called using nil *T pointer" {
 			panic("want panic from call with nil receiver, got " + r)
 		}
 	}()

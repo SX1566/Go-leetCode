@@ -2,89 +2,71 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Incomplete source tree on Android.
+
+// +build !android
+
 package buildutil_test
 
 import (
 	"go/build"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/buildutil"
-	"golang.org/x/tools/go/packages/packagestest"
 )
 
 func TestContainingPackage(t *testing.T) {
-	if runtime.Compiler == "gccgo" {
-		t.Skip("gccgo has no GOROOT")
-	}
-
-	exported := packagestest.Export(t, packagestest.GOPATH, []packagestest.Module{
-		{Name: "golang.org/x/tools/go/buildutil", Files: packagestest.MustCopyFileTree(".")}})
-	defer exported.Cleanup()
-
+	// unvirtualized:
 	goroot := runtime.GOROOT()
-	var gopath string
-	for _, env := range exported.Config.Env {
-		if !strings.HasPrefix(env, "GOPATH=") {
-			continue
-		}
-		gopath = strings.TrimPrefix(env, "GOPATH=")
-	}
-	if gopath == "" {
-		t.Fatal("Failed to fish GOPATH out of env: ", exported.Config.Env)
-	}
-	buildutildir := filepath.Join(gopath, "golang.org", "x", "tools", "go", "buildutil")
+	gopath := filepath.SplitList(os.Getenv("GOPATH"))[0]
 
-	type Test struct {
-		gopath, filename, wantPkg string
-	}
-
-	tests := []Test{
-		{gopath, goroot + "/src/fmt/print.go", "fmt"},
-		{gopath, goroot + "/src/encoding/json/foo.go", "encoding/json"},
-		{gopath, goroot + "/src/encoding/missing/foo.go", "(not found)"},
-		{gopath, gopath + "/src/golang.org/x/tools/go/buildutil/util_test.go",
+	tests := [][2]string{
+		{goroot + "/src/fmt/print.go", "fmt"},
+		{goroot + "/src/encoding/json/foo.go", "encoding/json"},
+		{goroot + "/src/encoding/missing/foo.go", "(not found)"},
+		{gopath + "/src/golang.org/x/tools/go/buildutil/util_test.go",
 			"golang.org/x/tools/go/buildutil"},
 	}
-
-	if runtime.GOOS != "windows" && runtime.GOOS != "plan9" {
-		// Make a symlink to gopath for test
-		tmp, err := ioutil.TempDir(os.TempDir(), "go")
-		if err != nil {
-			t.Errorf("Unable to create a temporary directory in %s", os.TempDir())
-		}
-
-		defer os.RemoveAll(tmp)
-
-		// symlink between $GOPATH/src and /tmp/go/src
-		// in order to test all possible symlink cases
-		if err := os.Symlink(gopath+"/src", tmp+"/src"); err != nil {
-			t.Fatal(err)
-		}
-		tests = append(tests, []Test{
-			{gopath, tmp + "/src/golang.org/x/tools/go/buildutil/util_test.go", "golang.org/x/tools/go/buildutil"},
-			{tmp, gopath + "/src/golang.org/x/tools/go/buildutil/util_test.go", "golang.org/x/tools/go/buildutil"},
-			{tmp, tmp + "/src/golang.org/x/tools/go/buildutil/util_test.go", "golang.org/x/tools/go/buildutil"},
-		}...)
+	// TODO(adonovan): simplify after Go 1.6.
+	if buildutil.AllowVendor != 0 {
+		tests = append(tests, [2]string{
+			gopath + "/src/vendor/golang.org/x/net/http2/hpack/hpack.go",
+			"vendor/golang.org/x/net/http2/hpack",
+		})
 	}
-
 	for _, test := range tests {
-		var got string
-		var buildContext = build.Default
-		buildContext.GOPATH = test.gopath
-		bp, err := buildutil.ContainingPackage(&buildContext, buildutildir, test.filename)
+		file, want := test[0], test[1]
+		bp, err := buildutil.ContainingPackage(&build.Default, ".", file)
+		got := bp.ImportPath
 		if err != nil {
 			got = "(not found)"
-		} else {
-			got = bp.ImportPath
 		}
-		if got != test.wantPkg {
-			t.Errorf("ContainingPackage(%q) = %s, want %s", test.filename, got, test.wantPkg)
+		if got != want {
+			t.Errorf("ContainingPackage(%q) = %s, want %s", file, got, want)
 		}
 	}
 
+	// TODO(adonovan): test on virtualized GOPATH too.
+}
+
+func TestStripVendor(t *testing.T) {
+	for _, test := range []struct {
+		path, want string
+	}{
+		{"", ""},
+		{"a", "a"},
+		{"a/b", "a/b"},
+		{"a/vendor/b", "b"},
+		{"a/b/vendor/c/d", "c/d"},
+		{"vendor/a/b", "a/b"},
+		{"a/vendor", "a/vendor"},
+	} {
+		if got := buildutil.StripVendor(test.path); got != test.want {
+			t.Errorf("StripVendor(%q) = %q, want %q",
+				test.path, got, test.want)
+		}
+	}
 }

@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -26,11 +25,11 @@ func reflectMapKeysIndex() {
 		print(k)                    // @pointsto <alloc in (reflect.Value).MapKeys>
 		print(k)                    // @types *int
 		print(k.Interface())        // @types *int
-		print(k.Interface().(*int)) // @pointsto command-line-arguments.a
+		print(k.Interface().(*int)) // @pointsto main.a
 
 		v := mrv.MapIndex(k)
 		print(v.Interface())         // @types *bool
-		print(v.Interface().(*bool)) // @pointsto command-line-arguments.b
+		print(v.Interface().(*bool)) // @pointsto main.b
 	}
 }
 
@@ -39,11 +38,11 @@ func reflectSetMapIndex() {
 	mrv := reflect.ValueOf(m)
 	mrv.SetMapIndex(reflect.ValueOf(&a), reflect.ValueOf(&b))
 
-	print(m[nil]) // @pointsto command-line-arguments.b
+	print(m[nil]) // @pointsto main.b
 
 	for _, k := range mrv.MapKeys() {
 		print(k.Interface())        // @types *int
-		print(k.Interface().(*int)) // @pointsto command-line-arguments.a
+		print(k.Interface().(*int)) // @pointsto main.a
 	}
 
 	tmap := reflect.TypeOf(m)
@@ -72,9 +71,9 @@ func reflectSetMapIndexInterface() {
 	reflect.ValueOf(m).SetMapIndex(reflect.ValueOf(&a), reflect.ValueOf(&b))
 	for k, v := range m {
 		print(k)         // @types *int
-		print(k.(*int))  // @pointsto command-line-arguments.a
+		print(k.(*int))  // @pointsto main.a
 		print(v)         // @types *bool
-		print(v.(*bool)) // @pointsto command-line-arguments.b
+		print(v.(*bool)) // @pointsto main.b
 	}
 }
 

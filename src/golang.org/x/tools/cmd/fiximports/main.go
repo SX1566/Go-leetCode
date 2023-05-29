@@ -6,7 +6,8 @@
 // import path for packages that have an "import comment" as defined by
 // https://golang.org/s/go14customimport.
 //
-// # Background
+//
+// Background
 //
 // The Go 1 custom import path mechanism lets the maintainer of a
 // package give it a stable name by which clients may import and "go
@@ -27,14 +28,15 @@
 // does not match the path of the enclosing package relative to
 // GOPATH/src:
 //
-//	     $ grep ^package $GOPATH/src/github.com/bob/vanity/foo/foo.go
-//		package foo // import "vanity.com/foo"
+//      $ grep ^package $GOPATH/src/github.com/bob/vanity/foo/foo.go
+// 	package foo // import "vanity.com/foo"
 //
 // The error from "go build" indicates that the package canonically
 // known as "vanity.com/foo" is locally installed under the
 // non-canonical name "github.com/bob/vanity/foo".
 //
-// # Usage
+//
+// Usage
 //
 // When a package that you depend on introduces a custom import comment,
 // and your workspace imports it by the non-canonical name, your build
@@ -56,7 +58,7 @@
 // The -baddomains flag is a list of domain names that should always be
 // considered non-canonical.  You can use this if you wish to make sure
 // that you no longer have any dependencies on packages from that
-// domain, even those that do not yet provide a canonical import path
+// domain, even those that do not yet provide a canical import path
 // comment.  For example, the default value of -baddomains includes the
 // moribund code hosting site code.google.com, so fiximports will report
 // an error for each import of a package from this domain remaining
@@ -64,6 +66,7 @@
 //
 // To see the changes fiximports would make without applying them, use
 // the -n flag.
+//
 package main
 
 import (
@@ -76,11 +79,11 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
-	exec "golang.org/x/sys/execabs"
 	"io"
 	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -111,7 +114,7 @@ The package... arguments specify a list of packages
 in the style of the go tool; see "go help packages".
 Hint: use "all" or "..." to match the entire workspace.
 
-For details, see https://pkg.go.dev/golang.org/x/tools/cmd/fiximports
+For details, see http://godoc.org/golang.org/x/tools/cmd/fiximports.
 
 Flags:
   -n:	       dry run: show changes, but don't apply them
@@ -123,7 +126,7 @@ func main() {
 	flag.Parse()
 
 	if len(flag.Args()) == 0 {
-		fmt.Fprint(stderr, usage)
+		fmt.Fprintf(stderr, usage)
 		os.Exit(1)
 	}
 	if !fiximports(flag.Args()...) {
@@ -202,7 +205,7 @@ func fiximports(packages ...string) bool {
 				strings.Contains(msg, "expects import") {
 				// don't show the very errors we're trying to fix
 			} else {
-				fmt.Fprintln(stderr, p.Error)
+				fmt.Fprintln(stderr, msg)
 			}
 		}
 
@@ -263,7 +266,7 @@ func fiximports(packages ...string) bool {
 
 					// TODO(adonovan): should we make an HTTP request to
 					// see if there's an HTTP redirect, a "go-import" meta tag,
-					// or an import comment in the latest revision?
+					// or an import comment in the the latest revision?
 					// It would duplicate a lot of logic from "go get".
 				}
 				break
@@ -464,13 +467,6 @@ type packageError struct {
 	Err         string   // the error itself
 }
 
-func (e packageError) Error() string {
-	if e.Pos != "" {
-		return e.Pos + ": " + e.Err
-	}
-	return e.Err
-}
-
 // list runs 'go list' with the specified arguments and returns the
 // metadata for matching packages.
 func list(args ...string) ([]*listPackage, error) {
@@ -495,18 +491,15 @@ func list(args ...string) ([]*listPackage, error) {
 	return pkgs, nil
 }
 
-// cwd contains the current working directory of the tool.
-//
-// It is initialized directly so that its value will be set for any other
-// package variables or init functions that depend on it, such as the gopath
-// variable in main_test.go.
-var cwd string = func() string {
-	cwd, err := os.Getwd()
+var cwd string
+
+func init() {
+	var err error
+	cwd, err = os.Getwd()
 	if err != nil {
 		log.Fatalf("os.Getwd: %v", err)
 	}
-	return cwd
-}()
+}
 
 // shortPath returns an absolute or relative name for path, whatever is shorter.
 // Plundered from $GOROOT/src/cmd/go/build.go.

@@ -1,6 +1,6 @@
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// licence that can be found in the LICENSE file.
 
 // The gomvpkg command moves go packages, updating import declarations.
 // See the -help message or Usage constant for details.
@@ -19,7 +19,7 @@ import (
 var (
 	fromFlag     = flag.String("from", "", "Import path of package to be moved")
 	toFlag       = flag.String("to", "", "Destination import path for package")
-	vcsMvCmdFlag = flag.String("vcs_mv_cmd", "", `A template for the version control system's "move directory" command, e.g. "git mv {{.Src}} {{.Dst}}"`)
+	vcsMvCmdFlag = flag.String("vcs_mv_cmd", "", `A template for the version control system's "move directory" command, e.g. "git mv {{.Src}} {{.Dst}}`)
 	helpFlag     = flag.Bool("help", false, "show usage message")
 )
 
@@ -83,7 +83,7 @@ func main() {
 	}
 
 	if *helpFlag || *fromFlag == "" || *toFlag == "" {
-		fmt.Print(Usage)
+		fmt.Println(Usage)
 		return
 	}
 

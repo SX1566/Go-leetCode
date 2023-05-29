@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/ast/astutil"
-	"golang.org/x/tools/internal/typeparams"
 )
 
 // pathToString returns a string containing the concrete types of the
@@ -40,6 +39,7 @@ func pathToString(path []ast.Node) string {
 // findInterval parses input and returns the [start, end) positions of
 // the first occurrence of substr in input.  f==nil indicates failure;
 // an error has already been reported in that case.
+//
 func findInterval(t *testing.T, fset *token.FileSet, input, substr string) (f *ast.File, start, end token.Pos) {
 	f, err := parser.ParseFile(fset, "<input>", input, 0)
 	if err != nil {
@@ -59,10 +59,7 @@ func findInterval(t *testing.T, fset *token.FileSet, input, substr string) (f *a
 }
 
 // Common input for following tests.
-var input = makeInput()
-
-func makeInput() string {
-	src := `
+const input = `
 // Hello.
 package main
 import "fmt"
@@ -73,87 +70,51 @@ func main() {
 }
 `
 
-	if typeparams.Enabled {
-		src += `
-func g[A any, P interface{ctype1| ~ctype2}](a1 A, p1 P) {}
-
-type PT[T constraint] struct{ t T }
-
-var v GT[targ1]
-
-var h = g[ targ2, targ3]
-`
-	}
-	return src
-}
-
 func TestPathEnclosingInterval_Exact(t *testing.T) {
-	type testCase struct {
-		substr string // first occurrence of this string indicates interval
-		node   string // complete text of expected containing node
-	}
-
-	dup := func(s string) testCase { return testCase{s, s} }
 	// For the exact tests, we check that a substring is mapped to
 	// the canonical string for the node it denotes.
-	tests := []testCase{
+	tests := []struct {
+		substr string // first occurrence of this string indicates interval
+		node   string // complete text of expected containing node
+	}{
 		{"package",
 			input[11 : len(input)-1]},
 		{"\npack",
 			input[11 : len(input)-1]},
-		dup("main"),
+		{"main",
+			"main"},
 		{"import",
 			"import \"fmt\""},
-		dup("\"fmt\""),
+		{"\"fmt\"",
+			"\"fmt\""},
 		{"\nfunc f() {}\n",
 			"func f() {}"},
 		{"x ",
 			"x"},
 		{" y",
 			"y"},
-		dup("z"),
+		{"z",
+			"z"},
 		{" + ",
 			"x + y"},
 		{" :=",
 			"z := (x + y)"},
-		dup("x + y"),
-		dup("(x + y)"),
+		{"x + y",
+			"x + y"},
+		{"(x + y)",
+			"(x + y)"},
 		{" (x + y) ",
 			"(x + y)"},
 		{" (x + y) // add",
 			"(x + y)"},
 		{"func",
 			"func f() {}"},
-		dup("func f() {}"),
+		{"func f() {}",
+			"func f() {}"},
 		{"\nfun",
 			"func f() {}"},
 		{" f",
 			"f"},
-	}
-	if typeparams.Enabled {
-		tests = append(tests, []testCase{
-			dup("[A any, P interface{ctype1| ~ctype2}]"),
-			{"[", "[A any, P interface{ctype1| ~ctype2}]"},
-			dup("A"),
-			{" any", "any"},
-			dup("ctype1"),
-			{"|", "ctype1| ~ctype2"},
-			dup("ctype2"),
-			{"~", "~ctype2"},
-			dup("~ctype2"),
-			{" ~ctype2", "~ctype2"},
-			{"]", "[A any, P interface{ctype1| ~ctype2}]"},
-			dup("a1"),
-			dup("a1 A"),
-			dup("(a1 A, p1 P)"),
-			dup("type PT[T constraint] struct{ t T }"),
-			dup("PT"),
-			dup("[T constraint]"),
-			dup("constraint"),
-			dup("targ1"),
-			{" targ2", "targ2"},
-			dup("g[ targ2, targ3]"),
-		}...)
 	}
 	for _, test := range tests {
 		f, start, end := findInterval(t, new(token.FileSet), input, test.substr)
@@ -184,14 +145,13 @@ func TestPathEnclosingInterval_Exact(t *testing.T) {
 }
 
 func TestPathEnclosingInterval_Paths(t *testing.T) {
-	type testCase struct {
-		substr string // first occurrence of this string indicates interval
-		path   string // the pathToString(),exact of the expected path
-	}
 	// For these tests, we check only the path of the enclosing
 	// node, but not its complete text because it's often quite
 	// large when !exact.
-	tests := []testCase{
+	tests := []struct {
+		substr string // first occurrence of this string indicates interval
+		path   string // the pathToString(),exact of the expected path
+	}{
 		{"// add",
 			"[BlockStmt FuncDecl File],false"},
 		{"(x + y",
@@ -218,18 +178,6 @@ func TestPathEnclosingInterval_Paths(t *testing.T) {
 			"[Ident File],true"},
 		{"f() // NB",
 			"[CallExpr ExprStmt BlockStmt FuncDecl File],true"},
-	}
-	if typeparams.Enabled {
-		tests = append(tests, []testCase{
-			{" any", "[Ident Field FieldList FuncDecl File],true"},
-			{"|", "[BinaryExpr Field FieldList InterfaceType Field FieldList FuncDecl File],true"},
-			{"ctype2",
-				"[Ident UnaryExpr BinaryExpr Field FieldList InterfaceType Field FieldList FuncDecl File],true"},
-			{"a1", "[Ident Field FieldList FuncDecl File],true"},
-			{"PT[T constraint]", "[TypeSpec GenDecl File],false"},
-			{"[T constraint]", "[FieldList TypeSpec GenDecl File],true"},
-			{"targ2", "[Ident IndexListExpr ValueSpec GenDecl File],true"},
-		}...)
 	}
 	for _, test := range tests {
 		f, start, end := findInterval(t, new(token.FileSet), input, test.substr)

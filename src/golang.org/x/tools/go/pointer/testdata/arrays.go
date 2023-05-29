@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -15,10 +14,10 @@ func array1() {
 	sliceB = append(sliceB, &b) // @line a1append
 
 	print(sliceA)    // @pointsto makeslice@a1make:16
-	print(sliceA[0]) // @pointsto command-line-arguments.a
+	print(sliceA[0]) // @pointsto main.a
 
 	print(sliceB)      // @pointsto append@a1append:17
-	print(sliceB[100]) // @pointsto command-line-arguments.b
+	print(sliceB[100]) // @pointsto main.b
 }
 
 func array2() {
@@ -28,10 +27,10 @@ func array2() {
 	sliceB := sliceA[:]
 
 	print(sliceA)    // @pointsto makeslice@a2make:16
-	print(sliceA[0]) // @pointsto command-line-arguments.a
+	print(sliceA[0]) // @pointsto main.a
 
 	print(sliceB)    // @pointsto makeslice@a2make:16
-	print(sliceB[0]) // @pointsto command-line-arguments.a
+	print(sliceB[0]) // @pointsto main.a
 }
 
 func array3() {
@@ -66,18 +65,18 @@ func array4() {
 	sl4a := append(sl4)  // @line a4L4
 	print(sl4a)          // @pointsto slicelit@a4L3:18 | append@a4L4:16
 	print(&sl4a[0])      // @pointsto slicelit[*]@a4L3:18 | append[*]@a4L4:16
-	print(sl4a[0])       // @pointsto command-line-arguments.a
+	print(sl4a[0])       // @pointsto main.a
 
 	var sl5 = []*int{&b} // @line a4L5
 	copy(sl5, sl4)
 	print(sl5)     // @pointsto slicelit@a4L5:18
 	print(&sl5[0]) // @pointsto slicelit[*]@a4L5:18
-	print(sl5[0])  // @pointsto command-line-arguments.b | command-line-arguments.a
+	print(sl5[0])  // @pointsto main.b | main.a
 
 	var sl6 = sl5[:0]
 	print(sl6)     // @pointsto slicelit@a4L5:18
 	print(&sl6[0]) // @pointsto slicelit[*]@a4L5:18
-	print(sl6[0])  // @pointsto command-line-arguments.b | command-line-arguments.a
+	print(sl6[0])  // @pointsto main.b | main.a
 }
 
 func array5() {
@@ -86,7 +85,7 @@ func array5() {
 	arr[1] = &b
 
 	var n int
-	print(arr[n]) // @pointsto command-line-arguments.a | command-line-arguments.b
+	print(arr[n]) // @pointsto main.a | main.b
 }
 
 func main() {

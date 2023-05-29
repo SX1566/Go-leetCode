@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package a
@@ -12,7 +11,7 @@ import "testing"
 
 func log(f func(*testing.T)) {
 	// The PTS of f is the set of called tests.  TestingQuux is not present.
-	print(f) // @pointsto command-line-arguments.Test | command-line-arguments.TestFoo
+	print(f) // @pointsto main.Test | main.TestFoo
 }
 
 func Test(t *testing.T) {
@@ -34,11 +33,10 @@ func BenchmarkFoo(b *testing.B) {
 }
 
 func ExampleBar() {
-	// Output:
 }
 
 // Excludes TestingQuux.
-// @calls testing.tRunner -> command-line-arguments.Test
-// @calls testing.tRunner -> command-line-arguments.TestFoo
-// @calls (*testing.B).runN -> command-line-arguments.BenchmarkFoo
-// @calls testing.runExample -> command-line-arguments.ExampleBar
+// @calls testing.tRunner -> main.Test
+// @calls testing.tRunner -> main.TestFoo
+// @calls testing.runExample -> main.ExampleBar
+// @calls (*testing.B).runN -> main.BenchmarkFoo

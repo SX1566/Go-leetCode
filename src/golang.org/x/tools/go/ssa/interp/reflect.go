@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 // Emulated "reflect" package.
@@ -66,6 +68,11 @@ func rV2V(v value) value {
 // makeReflectType boxes up an rtype in a reflect.Type interface.
 func makeReflectType(rt rtype) value {
 	return iface{rtypeType, rt}
+}
+
+func ext۰reflect۰Init(fr *frame, args []value) value {
+	// Signature: func()
+	return nil
 }
 
 func ext۰reflect۰rtype۰Bits(fr *frame, args []value) value {
@@ -326,7 +333,7 @@ func ext۰reflect۰Value۰MapKeys(fr *frame, args []value) value {
 		}
 
 	case *hashmap:
-		for _, e := range v.entries() {
+		for _, e := range v.table {
 			for ; e != nil; e = e.next {
 				keys = append(keys, makeReflectValue(tKey, e.key))
 			}
@@ -358,7 +365,7 @@ func ext۰reflect۰Value۰Pointer(fr *frame, args []value) value {
 	case []value:
 		return reflect.ValueOf(v).Pointer()
 	case *hashmap:
-		return reflect.ValueOf(v.entries()).Pointer()
+		return reflect.ValueOf(v.table).Pointer()
 	case map[value]value:
 		return reflect.ValueOf(v).Pointer()
 	case *ssa.Function:
@@ -407,11 +414,7 @@ func ext۰reflect۰Value۰Elem(fr *frame, args []value) value {
 	case iface:
 		return makeReflectValue(x.t, x.v)
 	case *value:
-		var v value
-		if x != nil {
-			v = *x
-		}
-		return makeReflectValue(rV2T(args[0]).t.Underlying().(*types.Pointer).Elem(), v)
+		return makeReflectValue(rV2T(args[0]).t.Underlying().(*types.Pointer).Elem(), *x)
 	default:
 		panic(fmt.Sprintf("reflect.(Value).Elem(%T)", x))
 	}

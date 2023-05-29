@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 import (
 	"bytes"
 	"fmt"
-	"go/constant"
+	exact "go/constant"
 	"go/token"
 	"go/types"
-	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"unsafe"
@@ -34,16 +34,15 @@ type exitPanic int
 // constValue returns the value of the constant with the
 // dynamic type tag appropriate for c.Type().
 func constValue(c *ssa.Const) value {
-	if c.Value == nil {
-		return zero(c.Type()) // typed zero
+	if c.IsNil() {
+		return zero(c.Type()) // typed nil
 	}
-	// c is not a type parameter so it's underlying type is basic.
 
 	if t, ok := c.Type().Underlying().(*types.Basic); ok {
 		// TODO(adonovan): eliminate untyped constants from SSA form.
 		switch t.Kind() {
 		case types.Bool, types.UntypedBool:
-			return constant.BoolVal(c.Value)
+			return exact.BoolVal(c.Value)
 		case types.Int, types.UntypedInt:
 			// Assume sizeof(int) is same on host and target.
 			return int(c.Int64())
@@ -78,8 +77,8 @@ func constValue(c *ssa.Const) value {
 		case types.Complex128, types.UntypedComplex:
 			return c.Complex128()
 		case types.String, types.UntypedString:
-			if c.Value.Kind() == constant.String {
-				return constant.StringVal(c.Value)
+			if c.Value.Kind() == exact.String {
+				return exact.StringVal(c.Value)
 			}
 			return string(rune(c.Int64()))
 		}
@@ -88,46 +87,34 @@ func constValue(c *ssa.Const) value {
 	panic(fmt.Sprintf("constValue: %s", c))
 }
 
-// fitsInt returns true if x fits in type int according to sizes.
-func fitsInt(x int64, sizes types.Sizes) bool {
-	intSize := sizes.Sizeof(types.Typ[types.Int])
-	if intSize < sizes.Sizeof(types.Typ[types.Int64]) {
-		maxInt := int64(1)<<(intSize-1) - 1
-		minInt := -int64(1) << (intSize - 1)
-		return minInt <= x && x <= maxInt
-	}
-	return true
-}
-
-// asInt64 converts x, which must be an integer, to an int64.
-//
-// Callers that need a value directly usable as an int should combine this with fitsInt().
-func asInt64(x value) int64 {
+// asInt converts x, which must be an integer, to an int suitable for
+// use as a slice or array index or operand to make().
+func asInt(x value) int {
 	switch x := x.(type) {
 	case int:
-		return int64(x)
-	case int8:
-		return int64(x)
-	case int16:
-		return int64(x)
-	case int32:
-		return int64(x)
-	case int64:
 		return x
+	case int8:
+		return int(x)
+	case int16:
+		return int(x)
+	case int32:
+		return int(x)
+	case int64:
+		return int(x)
 	case uint:
-		return int64(x)
+		return int(x)
 	case uint8:
-		return int64(x)
+		return int(x)
 	case uint16:
-		return int64(x)
+		return int(x)
 	case uint32:
-		return int64(x)
+		return int(x)
 	case uint64:
-		return int64(x)
+		return int(x)
 	case uintptr:
-		return int64(x)
+		return int(x)
 	}
-	panic(fmt.Sprintf("cannot convert %T to int64", x))
+	panic(fmt.Sprintf("cannot convert %T to int", x))
 }
 
 // asUint64 converts x, which must be an unsigned integer, to a uint64
@@ -150,26 +137,6 @@ func asUint64(x value) uint64 {
 	panic(fmt.Sprintf("cannot convert %T to uint64", x))
 }
 
-// asUnsigned returns the value of x, which must be an integer type, as its equivalent unsigned type,
-// and returns true if x is non-negative.
-func asUnsigned(x value) (value, bool) {
-	switch x := x.(type) {
-	case int:
-		return uint(x), x >= 0
-	case int8:
-		return uint8(x), x >= 0
-	case int16:
-		return uint16(x), x >= 0
-	case int32:
-		return uint32(x), x >= 0
-	case int64:
-		return uint64(x), x >= 0
-	case uint, uint8, uint32, uint64, uintptr:
-		return x, true
-	}
-	panic(fmt.Sprintf("cannot convert %T to unsigned", x))
-}
-
 // zero returns a new "zero" value of the specified type.
 func zero(t types.Type) value {
 	switch t := t.(type) {
@@ -182,7 +149,7 @@ func zero(t types.Type) value {
 			// this is unreachable.  Currently some
 			// constants have 'untyped' types when they
 			// should be defaulted by the typechecker.
-			t = types.Default(t).(*types.Basic)
+			t = ssa.DefaultType(t).(*types.Basic)
 		}
 		switch t.Kind() {
 		case types.Bool:
@@ -281,19 +248,19 @@ func slice(x, lo, hi, max value) value {
 		Cap = cap(a)
 	}
 
-	l := int64(0)
+	l := 0
 	if lo != nil {
-		l = asInt64(lo)
+		l = asInt(lo)
 	}
 
-	h := int64(Len)
+	h := Len
 	if hi != nil {
-		h = asInt64(hi)
+		h = asInt(hi)
 	}
 
-	m := int64(Cap)
+	m := Cap
 	if max != nil {
-		m = asInt64(max)
+		m = asInt(max)
 	}
 
 	switch x := x.(type) {
@@ -308,7 +275,7 @@ func slice(x, lo, hi, max value) value {
 	panic(fmt.Sprintf("slice: unexpected X type: %T", x))
 }
 
-// lookup returns x[idx] where x is a map.
+// lookup returns x[idx] where x is a map or string.
 func lookup(instr *ssa.Lookup, x, idx value) value {
 	switch x := x.(type) { // map or string
 	case map[value]value, *hashmap:
@@ -328,6 +295,8 @@ func lookup(instr *ssa.Lookup, x, idx value) value {
 			v = tuple{v, ok}
 		}
 		return v
+	case string:
+		return x[asInt(idx)]
 	}
 	panic(fmt.Sprintf("unexpected x type in Lookup: %T", x))
 }
@@ -335,6 +304,7 @@ func lookup(instr *ssa.Lookup, x, idx value) value {
 // binop implements all arithmetic and logical binary operators for
 // numeric datatypes and strings.  Both operands must have identical
 // dynamic type.
+//
 func binop(op token.Token, t types.Type, x, y value) value {
 	switch op {
 	case token.ADD:
@@ -606,11 +576,7 @@ func binop(op token.Token, t types.Type, x, y value) value {
 		}
 
 	case token.SHL:
-		u, ok := asUnsigned(y)
-		if !ok {
-			panic("negative shift amount")
-		}
-		y := asUint64(u)
+		y := asUint64(y)
 		switch x.(type) {
 		case int:
 			return x.(int) << y
@@ -637,11 +603,7 @@ func binop(op token.Token, t types.Type, x, y value) value {
 		}
 
 	case token.SHR:
-		u, ok := asUnsigned(y)
-		if !ok {
-			panic("negative shift amount")
-		}
-		y := asUint64(u)
+		y := asUint64(y)
 		switch x.(type) {
 		case int:
 			return x.(int) >> y
@@ -808,6 +770,7 @@ func binop(op token.Token, t types.Type, x, y value) value {
 // appropriate for type t.
 // If t is a reference type, at most one of x or y may be a nil value
 // of that type.
+//
 func eqnil(t types.Type, x, y value) bool {
 	switch t.Underlying().(type) {
 	case *types.Map, *types.Signature, *types.Slice:
@@ -916,6 +879,7 @@ func unop(instr *ssa.UnOp, x value) value {
 // typeAssert checks whether dynamic type of itf is instr.AssertedType.
 // It returns the extracted value on success, and panics on failure,
 // unless instr.CommaOk, in which case it always returns a "value,ok" tuple.
+//
 func typeAssert(i *interpreter, instr *ssa.TypeAssert, itf iface) value {
 	var v value
 	err := ""
@@ -952,19 +916,21 @@ func typeAssert(i *interpreter, instr *ssa.TypeAssert, itf iface) value {
 // failure if "BUG" appears in the combined stdout/stderr output, even
 // if it exits zero.  This is a global variable shared by all
 // interpreters in the same process.)
+//
 var CapturedOutput *bytes.Buffer
 var capturedOutputMu sync.Mutex
 
-// write writes bytes b to the target program's standard output.
+// write writes bytes b to the target program's file descriptor fd.
 // The print/println built-ins and the write() system call funnel
 // through here so they can be captured by the test driver.
-func print(b []byte) (int, error) {
-	if CapturedOutput != nil {
+func write(fd int, b []byte) (int, error) {
+	// TODO(adonovan): fix: on Windows, std{out,err} are not 1, 2.
+	if CapturedOutput != nil && (fd == 1 || fd == 2) {
 		capturedOutputMu.Lock()
 		CapturedOutput.Write(b) // ignore errors
 		capturedOutputMu.Unlock()
 	}
-	return os.Stdout.Write(b)
+	return syswrite(fd, b)
 }
 
 // callBuiltin interprets a call to builtin fn with arguments args,
@@ -1021,7 +987,7 @@ func callBuiltin(caller *frame, callpos token.Pos, fn *ssa.Builtin, args []value
 		if ln {
 			buf.WriteRune('\n')
 		}
-		print(buf.Bytes())
+		write(1, buf.Bytes())
 		return nil
 
 	case "len":
@@ -1113,9 +1079,34 @@ func callBuiltin(caller *frame, callpos token.Pos, fn *ssa.Builtin, args []value
 func rangeIter(x value, t types.Type) iter {
 	switch x := x.(type) {
 	case map[value]value:
-		return &mapIter{iter: reflect.ValueOf(x).MapRange()}
+		// TODO(adonovan): fix: leaks goroutines and channels
+		// on each incomplete map iteration.  We need to open
+		// up an iteration interface using the
+		// reflect.(Value).MapKeys machinery.
+		it := make(mapIter)
+		go func() {
+			for k, v := range x {
+				it <- [2]value{k, v}
+			}
+			close(it)
+		}()
+		return it
 	case *hashmap:
-		return &hashmapIter{iter: reflect.ValueOf(x.entries()).MapRange()}
+		// TODO(adonovan): fix: leaks goroutines and channels
+		// on each incomplete map iteration.  We need to open
+		// up an iteration interface using the
+		// reflect.(Value).MapKeys machinery.
+		it := make(mapIter)
+		go func() {
+			for _, e := range x.table {
+				for e != nil {
+					it <- [2]value{e.key, e.value}
+					e = e.next
+				}
+			}
+			close(it)
+		}()
+		return it
 	case string:
 		return &stringIter{Reader: strings.NewReader(x)}
 	}
@@ -1124,11 +1115,10 @@ func rangeIter(x value, t types.Type) iter {
 
 // widen widens a basic typed value x to the widest type of its
 // category, one of:
-//
-//	bool, int64, uint64, float64, complex128, string.
-//
+//   bool, int64, uint64, float64, complex128, string.
 // This is inefficient but reduces the size of the cross-product of
 // cases we have to consider.
+//
 func widen(x value) value {
 	switch y := x.(type) {
 	case bool, int64, uint64, float64, complex128, string, unsafe.Pointer:
@@ -1162,6 +1152,7 @@ func widen(x value) value {
 // conv converts the value x of type t_src to type t_dst and returns
 // the result.
 // Possible cases are described with the ssa.Convert operator.
+//
 func conv(t_dst, t_src types.Type, x value) value {
 	ut_src := t_src.Underlying()
 	ut_dst := t_dst.Underlying()
@@ -1230,7 +1221,7 @@ func conv(t_dst, t_src types.Type, x value) value {
 		// TODO(adonovan): fix: test integer -> named alias of string.
 		if ut_src.Info()&types.IsInteger != 0 {
 			if ut_dst, ok := ut_dst.(*types.Basic); ok && ut_dst.Kind() == types.String {
-				return fmt.Sprintf("%c", x)
+				return string(asInt(x))
 			}
 		}
 
@@ -1392,34 +1383,10 @@ func conv(t_dst, t_src types.Type, x value) value {
 	panic(fmt.Sprintf("unsupported conversion: %s  -> %s, dynamic type %T", t_src, t_dst, x))
 }
 
-// sliceToArrayPointer converts the value x of type slice to type t_dst
-// a pointer to array and returns the result.
-func sliceToArrayPointer(t_dst, t_src types.Type, x value) value {
-	utSrc := t_src.Underlying()
-	utDst := t_dst.Underlying()
-
-	if _, ok := utSrc.(*types.Slice); ok {
-		if utSrc, ok := utDst.(*types.Pointer); ok {
-			if arr, ok := utSrc.Elem().(*types.Array); ok {
-				x := x.([]value)
-				if arr.Len() > int64(len(x)) {
-					panic("array length is greater than slice length")
-				}
-				if x == nil {
-					return zero(utSrc)
-				}
-				v := value(array(x[:arr.Len()]))
-				return &v
-			}
-		}
-	}
-
-	panic(fmt.Sprintf("unsupported conversion: %s  -> %s, dynamic type %T", t_src, t_dst, x))
-}
-
 // checkInterface checks that the method set of x implements the
 // interface itype.
 // On success it returns "", on failure, an error message.
+//
 func checkInterface(i *interpreter, itype *types.Interface, x iface) string {
 	if meth, _ := types.MissingMethod(x.t, itype, true); meth != nil {
 		return fmt.Sprintf("interface conversion: %v is not %v: missing method %s",

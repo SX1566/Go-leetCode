@@ -14,29 +14,26 @@ import (
 )
 
 // AddImport adds the import path to the file f, if absent.
-func AddImport(fset *token.FileSet, f *ast.File, path string) (added bool) {
-	return AddNamedImport(fset, f, "", path)
+func AddImport(fset *token.FileSet, f *ast.File, ipath string) (added bool) {
+	return AddNamedImport(fset, f, "", ipath)
 }
 
-// AddNamedImport adds the import with the given name and path to the file f, if absent.
+// AddNamedImport adds the import path to the file f, if absent.
 // If name is not empty, it is used to rename the import.
 //
 // For example, calling
-//
 //	AddNamedImport(fset, f, "pathpkg", "path")
-//
 // adds
-//
 //	import pathpkg "path"
-func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added bool) {
-	if imports(f, name, path) {
+func AddNamedImport(fset *token.FileSet, f *ast.File, name, ipath string) (added bool) {
+	if imports(f, ipath) {
 		return false
 	}
 
 	newImport := &ast.ImportSpec{
 		Path: &ast.BasicLit{
 			Kind:  token.STRING,
-			Value: strconv.Quote(path),
+			Value: strconv.Quote(ipath),
 		},
 	}
 	if name != "" {
@@ -46,14 +43,12 @@ func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added 
 	// Find an import decl to add to.
 	// The goal is to find an existing import
 	// whose import path has the longest shared
-	// prefix with path.
+	// prefix with ipath.
 	var (
 		bestMatch  = -1         // length of longest shared prefix
 		lastImport = -1         // index in f.Decls of the file's final import decl
 		impDecl    *ast.GenDecl // import decl containing the best match
 		impIndex   = -1         // spec index in impDecl containing the best match
-
-		isThirdPartyPath = isThirdParty(path)
 	)
 	for i, decl := range f.Decls {
 		gen, ok := decl.(*ast.GenDecl)
@@ -70,27 +65,15 @@ func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added 
 				impDecl = gen
 			}
 
-			// Compute longest shared prefix with imports in this group and find best
-			// matched import spec.
-			// 1. Always prefer import spec with longest shared prefix.
-			// 2. While match length is 0,
-			// - for stdlib package: prefer first import spec.
-			// - for third party package: prefer first third party import spec.
-			// We cannot use last import spec as best match for third party package
-			// because grouped imports are usually placed last by goimports -local
-			// flag.
-			// See issue #19190.
-			seenAnyThirdParty := false
+			// Compute longest shared prefix with imports in this group.
 			for j, spec := range gen.Specs {
 				impspec := spec.(*ast.ImportSpec)
-				p := importPath(impspec)
-				n := matchLen(p, path)
-				if n > bestMatch || (bestMatch == 0 && !seenAnyThirdParty && isThirdPartyPath) {
+				n := matchLen(importPath(impspec), ipath)
+				if n > bestMatch {
 					bestMatch = n
 					impDecl = gen
 					impIndex = j
 				}
-				seenAnyThirdParty = seenAnyThirdParty || isThirdParty(p)
 			}
 		}
 	}
@@ -104,8 +87,8 @@ func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added 
 			impDecl.TokPos = f.Decls[lastImport].End()
 		} else {
 			// There are no existing imports.
-			// Our new import, preceded by a blank line,  goes after the package declaration
-			// and after the comment, if any, that starts on the same line as the
+			// Our new import goes after the package declaration and after
+			// the comment, if any, that starts on the same line as the
 			// package declaration.
 			impDecl.TokPos = f.Package
 
@@ -115,8 +98,7 @@ func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added 
 				if file.Line(c.Pos()) > pkgLine {
 					break
 				}
-				// +2 for a blank line
-				impDecl.TokPos = c.End() + 2
+				impDecl.TokPos = c.End()
 			}
 		}
 		f.Decls = append(f.Decls, nil)
@@ -135,15 +117,9 @@ func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added 
 	impDecl.Specs[insertAt] = newImport
 	pos := impDecl.Pos()
 	if insertAt > 0 {
-		// If there is a comment after an existing import, preserve the comment
-		// position by adding the new import after the comment.
-		if spec, ok := impDecl.Specs[insertAt-1].(*ast.ImportSpec); ok && spec.Comment != nil {
-			pos = spec.Comment.End()
-		} else {
-			// Assign same position as the previous import,
-			// so that the sorter sees it as being in the same block.
-			pos = impDecl.Specs[insertAt-1].Pos()
-		}
+		// Assign same position as the previous import,
+		// so that the sorter sees it as being in the same block.
+		pos = impDecl.Specs[insertAt-1].Pos()
 	}
 	if newImport.Name != nil {
 		newImport.Name.NamePos = pos
@@ -161,55 +137,12 @@ func AddNamedImport(fset *token.FileSet, f *ast.File, name, path string) (added 
 	}
 
 	f.Imports = append(f.Imports, newImport)
-
-	if len(f.Decls) <= 1 {
-		return true
-	}
-
-	// Merge all the import declarations into the first one.
-	var first *ast.GenDecl
-	for i := 0; i < len(f.Decls); i++ {
-		decl := f.Decls[i]
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.IMPORT || declImports(gen, "C") {
-			continue
-		}
-		if first == nil {
-			first = gen
-			continue // Don't touch the first one.
-		}
-		// We now know there is more than one package in this import
-		// declaration. Ensure that it ends up parenthesized.
-		first.Lparen = first.Pos()
-		// Move the imports of the other import declaration to the first one.
-		for _, spec := range gen.Specs {
-			spec.(*ast.ImportSpec).Path.ValuePos = first.Pos()
-			first.Specs = append(first.Specs, spec)
-		}
-		f.Decls = append(f.Decls[:i], f.Decls[i+1:]...)
-		i--
-	}
-
 	return true
 }
 
-func isThirdParty(importPath string) bool {
-	// Third party package import path usually contains "." (".com", ".org", ...)
-	// This logic is taken from golang.org/x/tools/imports package.
-	return strings.Contains(importPath, ".")
-}
-
 // DeleteImport deletes the import path from the file f, if present.
-// If there are duplicate import declarations, all matching ones are deleted.
 func DeleteImport(fset *token.FileSet, f *ast.File, path string) (deleted bool) {
-	return DeleteNamedImport(fset, f, "", path)
-}
-
-// DeleteNamedImport deletes the import with the given name and path from the file f, if present.
-// If there are duplicate import declarations, all matching ones are deleted.
-func DeleteNamedImport(fset *token.FileSet, f *ast.File, name, path string) (deleted bool) {
 	var delspecs []*ast.ImportSpec
-	var delcomments []*ast.CommentGroup
 
 	// Find the import nodes that import path, if any.
 	for i := 0; i < len(f.Decls); i++ {
@@ -221,7 +154,7 @@ func DeleteNamedImport(fset *token.FileSet, f *ast.File, name, path string) (del
 		for j := 0; j < len(gen.Specs); j++ {
 			spec := gen.Specs[j]
 			impspec := spec.(*ast.ImportSpec)
-			if importName(impspec) != name || importPath(impspec) != path {
+			if importPath(impspec) != path {
 				continue
 			}
 
@@ -240,50 +173,20 @@ func DeleteNamedImport(fset *token.FileSet, f *ast.File, name, path string) (del
 				i--
 				break
 			} else if len(gen.Specs) == 1 {
-				if impspec.Doc != nil {
-					delcomments = append(delcomments, impspec.Doc)
-				}
-				if impspec.Comment != nil {
-					delcomments = append(delcomments, impspec.Comment)
-				}
-				for _, cg := range f.Comments {
-					// Found comment on the same line as the import spec.
-					if cg.End() < impspec.Pos() && fset.Position(cg.End()).Line == fset.Position(impspec.Pos()).Line {
-						delcomments = append(delcomments, cg)
-						break
-					}
-				}
-
-				spec := gen.Specs[0].(*ast.ImportSpec)
-
-				// Move the documentation right after the import decl.
-				if spec.Doc != nil {
-					for fset.Position(gen.TokPos).Line+1 < fset.Position(spec.Doc.Pos()).Line {
-						fset.File(gen.TokPos).MergeLine(fset.Position(gen.TokPos).Line)
-					}
-				}
-				for _, cg := range f.Comments {
-					if cg.End() < spec.Pos() && fset.Position(cg.End()).Line == fset.Position(spec.Pos()).Line {
-						for fset.Position(gen.TokPos).Line+1 < fset.Position(spec.Pos()).Line {
-							fset.File(gen.TokPos).MergeLine(fset.Position(gen.TokPos).Line)
-						}
-						break
-					}
-				}
+				gen.Lparen = token.NoPos // drop parens
 			}
 			if j > 0 {
 				lastImpspec := gen.Specs[j-1].(*ast.ImportSpec)
-				lastLine := fset.PositionFor(lastImpspec.Path.ValuePos, false).Line
-				line := fset.PositionFor(impspec.Path.ValuePos, false).Line
+				lastLine := fset.Position(lastImpspec.Path.ValuePos).Line
+				line := fset.Position(impspec.Path.ValuePos).Line
 
 				// We deleted an entry but now there may be
 				// a blank line-sized hole where the import was.
-				if line-lastLine > 1 || !gen.Rparen.IsValid() {
+				if line-lastLine > 1 {
 					// There was a blank line immediately preceding the deleted import,
-					// so there's no need to close the hole. The right parenthesis is
-					// invalid after AddImport to an import statement without parenthesis.
+					// so there's no need to close the hole.
 					// Do nothing.
-				} else if line != fset.File(gen.Rparen).LineCount() {
+				} else {
 					// There was no blank line. Close the hole.
 					fset.File(gen.Rparen).MergeLine(line)
 				}
@@ -292,7 +195,7 @@ func DeleteNamedImport(fset *token.FileSet, f *ast.File, name, path string) (del
 		}
 	}
 
-	// Delete imports from f.Imports.
+	// Delete them from f.Imports.
 	for i := 0; i < len(f.Imports); i++ {
 		imp := f.Imports[i]
 		for j, del := range delspecs {
@@ -301,21 +204,6 @@ func DeleteNamedImport(fset *token.FileSet, f *ast.File, name, path string) (del
 				f.Imports = f.Imports[:len(f.Imports)-1]
 				copy(delspecs[j:], delspecs[j+1:])
 				delspecs = delspecs[:len(delspecs)-1]
-				i--
-				break
-			}
-		}
-	}
-
-	// Delete comments from f.Comments.
-	for i := 0; i < len(f.Comments); i++ {
-		cg := f.Comments[i]
-		for j, del := range delcomments {
-			if cg == del {
-				copy(f.Comments[i:], f.Comments[i+1:])
-				f.Comments = f.Comments[:len(f.Comments)-1]
-				copy(delcomments[j:], delcomments[j+1:])
-				delcomments = delcomments[:len(delcomments)-1]
 				i--
 				break
 			}
@@ -383,14 +271,9 @@ func (fn visitFn) Visit(node ast.Node) ast.Visitor {
 	return fn
 }
 
-// imports reports whether f has an import with the specified name and path.
-func imports(f *ast.File, name, path string) bool {
-	for _, s := range f.Imports {
-		if importName(s) == name && importPath(s) == path {
-			return true
-		}
-	}
-	return false
+// imports returns true if f imports path.
+func imports(f *ast.File, path string) bool {
+	return importSpec(f, path) != nil
 }
 
 // importSpec returns the import spec if f imports path,
@@ -404,23 +287,14 @@ func importSpec(f *ast.File, path string) *ast.ImportSpec {
 	return nil
 }
 
-// importName returns the name of s,
-// or "" if the import is not named.
-func importName(s *ast.ImportSpec) string {
-	if s.Name == nil {
-		return ""
-	}
-	return s.Name.Name
-}
-
 // importPath returns the unquoted import path of s,
 // or "" if the path is not properly quoted.
 func importPath(s *ast.ImportSpec) string {
 	t, err := strconv.Unquote(s.Path.Value)
-	if err != nil {
-		return ""
+	if err == nil {
+		return t
 	}
-	return t
+	return ""
 }
 
 // declImports reports whether gen contains an import of path.

@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -24,14 +23,14 @@ func func1() {
 		return f(x)
 	}
 
-	print(g(&a)) // @pointsto command-line-arguments.a | command-line-arguments.b | h@f1h:6
-	print(f(&a)) // @pointsto command-line-arguments.a | command-line-arguments.b
-	print(&a)    // @pointsto command-line-arguments.a
+	print(g(&a)) // @pointsto main.a | main.b | h@f1h:6
+	print(f(&a)) // @pointsto main.a | main.b
+	print(&a)    // @pointsto main.a
 }
 
-// @calls command-line-arguments.func1 -> command-line-arguments.func1$2
-// @calls command-line-arguments.func1 -> command-line-arguments.func1$1
-// @calls command-line-arguments.func1$2 ->  command-line-arguments.func1$1
+// @calls main.func1 -> main.func1$2
+// @calls main.func1 -> main.func1$1
+// @calls main.func1$2 ->  main.func1$1
 
 func func2() {
 	var x, y *int
@@ -41,8 +40,8 @@ func func2() {
 	go func() {
 		y = &b
 	}()
-	print(x) // @pointsto command-line-arguments.a
-	print(y) // @pointsto command-line-arguments.b
+	print(x) // @pointsto main.a
+	print(y) // @pointsto main.b
 }
 
 func func3() {
@@ -54,8 +53,8 @@ func func3() {
 		}
 		return
 	}()
-	print(x) // @pointsto command-line-arguments.a
-	print(y) // @pointsto command-line-arguments.b | command-line-arguments.c
+	print(x) // @pointsto main.a
+	print(y) // @pointsto main.b | main.c
 }
 
 func swap(x, y *int) (*int, *int) { // @line swap
@@ -75,26 +74,26 @@ func func4() {
 	print(q) // @pointsto makeslice[*]@func4make:11
 
 	f := &b
-	print(f) // @pointsto command-line-arguments.b
+	print(f) // @pointsto main.b
 }
 
 type T int
 
 func (t *T) f(x *int) *int {
-	print(t) // @pointsto command-line-arguments.a
-	print(x) // @pointsto command-line-arguments.c
+	print(t) // @pointsto main.a
+	print(x) // @pointsto main.c
 	return &b
 }
 
 func (t *T) g(x *int) *int {
-	print(t) // @pointsto command-line-arguments.a
-	print(x) // @pointsto command-line-arguments.b
+	print(t) // @pointsto main.a
+	print(x) // @pointsto main.b
 	return &c
 }
 
 func (t *T) h(x *int) *int {
-	print(t) // @pointsto command-line-arguments.a
-	print(x) // @pointsto command-line-arguments.b
+	print(t) // @pointsto main.a
+	print(x) // @pointsto main.b
 	return &c
 }
 
@@ -103,29 +102,29 @@ var h func(*T, *int) *int
 func func5() {
 	// Static call of method.
 	t := (*T)(&a)
-	print(t.f(&c)) // @pointsto command-line-arguments.b
+	print(t.f(&c)) // @pointsto main.b
 
 	// Static call of method as function
-	print((*T).g(t, &b)) // @pointsto command-line-arguments.c
+	print((*T).g(t, &b)) // @pointsto main.c
 
 	// Dynamic call (not invoke) of method.
 	h = (*T).h
-	print(h(t, &b)) // @pointsto command-line-arguments.c
+	print(h(t, &b)) // @pointsto main.c
 }
 
-// @calls command-line-arguments.func5 -> (*command-line-arguments.T).f
-// @calls command-line-arguments.func5 -> (*command-line-arguments.T).g$thunk
-// @calls command-line-arguments.func5 -> (*command-line-arguments.T).h$thunk
+// @calls main.func5 -> (*main.T).f
+// @calls main.func5 -> (*main.T).g$thunk
+// @calls main.func5 -> (*main.T).h$thunk
 
 func func6() {
 	A := &a
 	f := func() *int {
 		return A // (free variable)
 	}
-	print(f()) // @pointsto command-line-arguments.a
+	print(f()) // @pointsto main.a
 }
 
-// @calls command-line-arguments.func6 -> command-line-arguments.func6$1
+// @calls main.func6 -> main.func6$1
 
 type I interface {
 	f()
@@ -139,18 +138,18 @@ func func7() {
 	var i I = D{}
 	imethodClosure := i.f
 	imethodClosure()
-	// @calls command-line-arguments.func7 -> (command-line-arguments.I).f$bound
-	// @calls (command-line-arguments.I).f$bound -> (command-line-arguments.D).f
+	// @calls main.func7 -> (main.I).f$bound
+	// @calls (main.I).f$bound -> (main.D).f
 
 	var d D
 	cmethodClosure := d.f
 	cmethodClosure()
-	// @calls command-line-arguments.func7 -> (command-line-arguments.D).f$bound
-	// @calls (command-line-arguments.D).f$bound ->(command-line-arguments.D).f
+	// @calls main.func7 -> (main.D).f$bound
+	// @calls (main.D).f$bound ->(main.D).f
 
 	methodExpr := D.f
 	methodExpr(d)
-	// @calls command-line-arguments.func7 -> (command-line-arguments.D).f$thunk
+	// @calls main.func7 -> (main.D).f$thunk
 }
 
 func func8(x ...int) {
@@ -183,11 +182,11 @@ func func9() {
 		i.f() // must not crash the solver
 	}(new(D))
 
-	print(e.x1) // @pointsto command-line-arguments.a
-	print(e.x2) // @pointsto command-line-arguments.a
-	print(e.x3) // @pointsto command-line-arguments.a
-	print(e.x4) // @pointsto command-line-arguments.a
-	print(e.x5) // @pointsto command-line-arguments.a
+	print(e.x1) // @pointsto main.a
+	print(e.x2) // @pointsto main.a
+	print(e.x3) // @pointsto main.a
+	print(e.x4) // @pointsto main.a
+	print(e.x5) // @pointsto main.a
 }
 
 func main() {
@@ -202,5 +201,5 @@ func main() {
 	func9()
 }
 
-// @calls <root> -> command-line-arguments.main
-// @calls <root> -> command-line-arguments.init
+// @calls <root> -> main.main
+// @calls <root> -> main.init

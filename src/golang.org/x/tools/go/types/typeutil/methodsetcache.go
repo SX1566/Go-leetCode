@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // This file implements a cache of method sets.
 
 package typeutil
@@ -25,6 +27,7 @@ type MethodSetCache struct {
 // If cache is nil, this function is equivalent to types.NewMethodSet(T).
 // Utility functions can thus expose an optional *MethodSetCache
 // parameter to clients that care about performance.
+//
 func (cache *MethodSetCache) MethodSet(T types.Type) *types.MethodSet {
 	if cache == nil {
 		return types.NewMethodSet(T)

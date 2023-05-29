@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // This package provides Rapid Type Analysis (RTA) for Go, a fast
 // algorithm for call graph construction and discovery of reachable code
 // (and hence dead code) and runtime types.  The algorithm was first
@@ -39,15 +41,12 @@
 // analysis, but the algorithm is much faster.  For example, running the
 // cmd/callgraph tool on its own source takes ~2.1s for RTA and ~5.4s
 // for points-to analysis.
+//
 package rta // import "golang.org/x/tools/go/callgraph/rta"
 
 // TODO(adonovan): test it by connecting it to the interpreter and
 // replacing all "unreachable" functions by a special intrinsic, and
 // ensure that that intrinsic is never called.
-
-// TODO(zpavlinovic): decide if the clients must use ssa.InstantiateGenerics
-// mode when building programs with generics. It might be possible to
-// extend rta to accurately support generics with just ssa.BuilderMode(0).
 
 import (
 	"fmt"
@@ -60,6 +59,7 @@ import (
 
 // A Result holds the results of Rapid Type Analysis, which includes the
 // set of reachable functions/methods, runtime types, and the call graph.
+//
 type Result struct {
 	// CallGraph is the discovered callgraph.
 	// It does not include edges for calls made via reflection.
@@ -186,7 +186,7 @@ func (r *rta) visitDynCall(site ssa.CallInstruction) {
 	r.dynCallSites.Set(S, append(sites, site))
 
 	// For each function of signature S that we know is address-taken,
-	// add an edge and mark it reachable.
+	// mark it reachable.  We'll add the callgraph edges later.
 	funcs, _ := r.addrTakenFuncsBySig.At(S).(map[*ssa.Function]bool)
 	for g := range funcs {
 		r.addEdge(site, g, true)
@@ -264,6 +264,7 @@ func (r *rta) visitFunc(f *ssa.Function) {
 // If buildCallGraph is true, Result.CallGraph will contain a call
 // graph; otherwise, only the other fields (reachable functions) are
 // populated.
+//
 func Analyze(roots []*ssa.Function, buildCallGraph bool) *Result {
 	if len(roots) == 0 {
 		return nil
@@ -342,6 +343,7 @@ func (r *rta) implementations(I *types.Interface) []types.Type {
 // addRuntimeType is called for each concrete type that can be the
 // dynamic type of some interface or reflect.Value.
 // Adapted from needMethods in go/ssa/builder.go
+//
 func (r *rta) addRuntimeType(T types.Type, skip bool) {
 	if prev, ok := r.result.RuntimeTypes.At(T).(bool); ok {
 		if skip && !prev {

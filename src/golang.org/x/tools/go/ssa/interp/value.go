@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 // Values
@@ -382,7 +384,7 @@ func writeValue(buf *bytes.Buffer, v value) {
 	case *hashmap:
 		buf.WriteString("map[")
 		sep := " "
-		for _, e := range v.entries() {
+		for _, e := range v.table {
 			for e != nil {
 				buf.WriteString(sep)
 				sep = " "
@@ -489,37 +491,9 @@ func (it *stringIter) next() tuple {
 	return okv
 }
 
-type mapIter struct {
-	iter *reflect.MapIter
-	ok   bool
-}
+type mapIter chan [2]value
 
-func (it *mapIter) next() tuple {
-	it.ok = it.iter.Next()
-	if !it.ok {
-		return []value{false, nil, nil}
-	}
-	k, v := it.iter.Key().Interface(), it.iter.Value().Interface()
-	return []value{true, k, v}
-}
-
-type hashmapIter struct {
-	iter *reflect.MapIter
-	ok   bool
-	cur  *entry
-}
-
-func (it *hashmapIter) next() tuple {
-	for {
-		if it.cur != nil {
-			k, v := it.cur.key, it.cur.value
-			it.cur = it.cur.next
-			return []value{true, k, v}
-		}
-		it.ok = it.iter.Next()
-		if !it.ok {
-			return []value{false, nil, nil}
-		}
-		it.cur = it.iter.Value().Interface().(*entry)
-	}
+func (it mapIter) next() tuple {
+	kv, ok := <-it
+	return tuple{ok, kv[0], kv[1]}
 }

@@ -33,19 +33,26 @@ type Presentation struct {
 	ImplementsHTML,
 	MethodSetHTML,
 	PackageHTML,
-	PackageRootHTML,
+	PackageText,
 	SearchHTML,
 	SearchDocHTML,
 	SearchCodeHTML,
 	SearchTxtHTML,
-	SearchDescXML *template.Template // If not nil, register a /opensearch.xml handler with this template.
+	SearchText,
+	SearchDescXML *template.Template
 
 	// TabWidth optionally specifies the tab width.
 	TabWidth int
 
 	ShowTimestamps bool
 	ShowPlayground bool
+	ShowExamples   bool
 	DeclLinks      bool
+
+	// SrcMode outputs source code instead of documentation in command-line mode.
+	SrcMode bool
+	// HTMLMode outputs HTML instead of plain text in command-line mode.
+	HTMLMode bool
 
 	// NotesRx optionally specifies a regexp to match
 	// notes to render in the output.
@@ -82,10 +89,6 @@ type Presentation struct {
 	// body for displaying search results.
 	SearchResults []SearchResultFunc
 
-	// GoogleAnalytics optionally adds Google Analytics via the provided
-	// tracking ID to each page.
-	GoogleAnalytics string
-
 	initFuncMapOnce sync.Once
 	funcMap         template.FuncMap
 	templateFuncs   template.FuncMap
@@ -103,8 +106,9 @@ func NewPresentation(c *Corpus) *Presentation {
 		mux:        http.NewServeMux(),
 		fileServer: http.FileServer(httpfs.New(c.fs)),
 
-		TabWidth:  4,
-		DeclLinks: true,
+		TabWidth:     4,
+		ShowExamples: true,
+		DeclLinks:    true,
 		SearchResults: []SearchResultFunc{
 			(*Presentation).SearchResultDoc,
 			(*Presentation).SearchResultCode,
@@ -129,9 +133,7 @@ func NewPresentation(c *Corpus) *Presentation {
 	p.pkgHandler.registerWithMux(p.mux)
 	p.mux.HandleFunc("/", p.ServeFile)
 	p.mux.HandleFunc("/search", p.HandleSearch)
-	if p.SearchDescXML != nil {
-		p.mux.HandleFunc("/opensearch.xml", p.serveSearchDesc)
-	}
+	p.mux.HandleFunc("/opensearch.xml", p.serveSearchDesc)
 	return p
 }
 
@@ -154,11 +156,11 @@ func (p *Presentation) CmdFSRoot() string {
 // TODO(bradfitz): move this to be a method on Corpus. Just moving code around for now,
 // but this doesn't feel right.
 func (p *Presentation) GetPkgPageInfo(abspath, relpath string, mode PageInfoMode) *PageInfo {
-	return p.pkgHandler.GetPageInfo(abspath, relpath, mode, "", "")
+	return p.pkgHandler.GetPageInfo(abspath, relpath, mode)
 }
 
 // TODO(bradfitz): move this to be a method on Corpus. Just moving code around for now,
 // but this doesn't feel right.
 func (p *Presentation) GetCmdPageInfo(abspath, relpath string, mode PageInfoMode) *PageInfo {
-	return p.cmdHandler.GetPageInfo(abspath, relpath, mode, "", "")
+	return p.cmdHandler.GetPageInfo(abspath, relpath, mode)
 }

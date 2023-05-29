@@ -28,7 +28,7 @@ const debugNS = false
 // mount point and have the system behave as if the union of those
 // file systems were present at the mount point.
 // For example, if the OS file system has a Go installation in
-// c:\Go and additional Go path trees in d:\Work1 and d:\Work2, then
+// c:\Go and additional Go path trees in  d:\Work1 and d:\Work2, then
 // this name space creates the view we want for the godoc server:
 //
 //	NameSpace{
@@ -52,11 +52,6 @@ const debugNS = false
 // A particular mount point entry is a triple (old, fs, new), meaning that to
 // operate on a path beginning with old, replace that prefix (old) with new
 // and then pass that path to the FileSystem implementation fs.
-//
-// If you do not explicitly mount a FileSystem at the root mountpoint "/" of the
-// NameSpace like above, Stat("/") will return a "not found" error which could
-// break typical directory traversal routines. In such cases, use NewNameSpace()
-// to get a NameSpace pre-initialized with an emulated empty directory at root.
 //
 // Given this name space, a ReadDir of /src/pkg/code will check each prefix
 // of the path for a mount point (first /src/pkg/code, then /src/pkg, then /src,
@@ -97,6 +92,7 @@ const debugNS = false
 // mount table entries always have old == "/src/pkg").  The 'old' field is
 // useful to callers, because they receive just a []mountedFS and not any
 // other indication of which mount point was found.
+//
 type NameSpace map[string][]mountedFS
 
 // A mountedFS handles requests for path by replacing
@@ -107,7 +103,7 @@ type mountedFS struct {
 	new string
 }
 
-// hasPathPrefix reports whether x == y or x == y + "/" + more.
+// hasPathPrefix returns true if x == y or x == y + "/" + more
 func hasPathPrefix(x, y string) bool {
 	return x == y || strings.HasPrefix(x, y) && (strings.HasSuffix(y, "/") || strings.HasPrefix(x[len(y):], "/"))
 }
@@ -224,14 +220,11 @@ func (ns NameSpace) Open(path string) (ReadSeekCloser, error) {
 		if debugNS {
 			fmt.Printf("tx %s: %v\n", path, m.translate(path))
 		}
-		tp := m.translate(path)
-		r, err1 := m.fs.Open(tp)
+		r, err1 := m.fs.Open(m.translate(path))
 		if err1 == nil {
 			return r, nil
 		}
-		// IsNotExist errors in overlay FSes can mask real errors in
-		// the underlying FS, so ignore them if there is another error.
-		if err == nil || os.IsNotExist(err) {
+		if err == nil {
 			err = err1
 		}
 	}
@@ -293,55 +286,70 @@ var startTime = time.Now()
 // to find that subdirectory, because we've mounted d:\Work1 and d:\Work2
 // there.  So if we don't see "src" in the directory listing for c:\Go, we add an
 // entry for it before returning.
+//
 func (ns NameSpace) ReadDir(path string) ([]os.FileInfo, error) {
 	path = ns.clean(path)
 
-	// List matching directories and determine whether any of them contain
-	// Go files.
 	var (
-		dirs       [][]os.FileInfo
-		goDirIndex = -1
-		readDirErr error
+		haveGo   = false
+		haveName = map[string]bool{}
+		all      []os.FileInfo
+		err      error
+		first    []os.FileInfo
 	)
 
 	for _, m := range ns.resolve(path) {
-		dir, err := m.fs.ReadDir(m.translate(path))
-		if err != nil {
-			if readDirErr == nil {
-				readDirErr = err
+		dir, err1 := m.fs.ReadDir(m.translate(path))
+		if err1 != nil {
+			if err == nil {
+				err = err1
 			}
 			continue
 		}
 
-		dirs = append(dirs, dir)
+		if dir == nil {
+			dir = []os.FileInfo{}
+		}
 
-		if goDirIndex < 0 {
-			for _, f := range dir {
-				if !f.IsDir() && strings.HasSuffix(f.Name(), ".go") {
-					goDirIndex = len(dirs) - 1
+		if first == nil {
+			first = dir
+		}
+
+		// If we don't yet have Go files in 'all' and this directory
+		// has some, add all the files from this directory.
+		// Otherwise, only add subdirectories.
+		useFiles := false
+		if !haveGo {
+			for _, d := range dir {
+				if strings.HasSuffix(d.Name(), ".go") {
+					useFiles = true
+					haveGo = true
 					break
 				}
 			}
 		}
-	}
 
-	// Build a list of files and subdirectories. If a directory contains Go files,
-	// only include files from that directory. Otherwise, include files from
-	// all directories. Include subdirectories from all directories regardless
-	// of whether Go files are present.
-	haveName := make(map[string]bool)
-	var all []os.FileInfo
-	for i, dir := range dirs {
-		for _, f := range dir {
-			name := f.Name()
-			if !haveName[name] && (f.IsDir() || goDirIndex < 0 || goDirIndex == i) {
-				all = append(all, f)
+		for _, d := range dir {
+			name := d.Name()
+			if (d.IsDir() || useFiles) && !haveName[name] {
 				haveName[name] = true
+				all = append(all, d)
 			}
 		}
 	}
 
-	// Add any missing directories needed to reach mount points.
+	// We didn't find any directories containing Go files.
+	// If some directory returned successfully, use that.
+	if !haveGo {
+		for _, d := range first {
+			if !haveName[d.Name()] {
+				haveName[d.Name()] = true
+				all = append(all, d)
+			}
+		}
+	}
+
+	// Built union.  Add any missing directories needed to reach mount points.
 	for old := range ns {
 		if hasPathPrefix(old, path) && old != path {
 			// Find next element after path in old.
@@ -358,25 +366,11 @@ func (ns NameSpace) ReadDir(path string) ([]os.FileInfo, error) {
 	}
 
 	if len(all) == 0 {
-		return nil, readDirErr
+		return nil, err
 	}
 
 	sort.Sort(byName(all))
 	return all, nil
-}
-
-// RootType returns the RootType for the given path in the namespace.
-func (ns NameSpace) RootType(path string) RootType {
-	// We resolve the given path to a list of mountedFS and then return
-	// the root type for the filesystem which contains the path.
-	for _, m := range ns.resolve(path) {
-		_, err := m.fs.ReadDir(m.translate(path))
-		// Found a match, return the filesystem's root type
-		if err == nil {
-			return m.fs.RootType(path)
-		}
-	}
-	return ""
 }
 
 // byName implements sort.Interface.

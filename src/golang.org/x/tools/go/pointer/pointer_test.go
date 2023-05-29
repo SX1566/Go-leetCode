@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // No testdata on Android.
 
-//go:build !android
 // +build !android
 
 package pointer_test
@@ -21,20 +22,17 @@ import (
 	"go/types"
 	"io/ioutil"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"golang.org/x/tools/go/callgraph"
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
 	"golang.org/x/tools/go/types/typeutil"
-	"golang.org/x/tools/internal/typeparams"
 )
 
 var inputs = []string{
@@ -46,7 +44,6 @@ var inputs = []string{
 	"testdata/chanreflect.go",
 	"testdata/context.go",
 	"testdata/conv.go",
-	"testdata/extended.go",
 	"testdata/finalizer.go",
 	"testdata/flow.go",
 	"testdata/fmtexcerpt.go",
@@ -63,82 +60,73 @@ var inputs = []string{
 	"testdata/rtti.go",
 	"testdata/structreflect.go",
 	"testdata/structs.go",
-	// "testdata/timer.go", // TODO(adonovan): fix broken assumptions about runtime timers
+	"testdata/timer.go",
 }
-
-var raceEnabled = false
 
 // Expectation grammar:
 //
 // @calls f -> g
 //
-//	A 'calls' expectation asserts that edge (f, g) appears in the
-//	callgraph.  f and g are notated as per Function.String(), which
-//	may contain spaces (e.g. promoted method in anon struct).
+//   A 'calls' expectation asserts that edge (f, g) appears in the
+//   callgraph.  f and g are notated as per Function.String(), which
+//   may contain spaces (e.g. promoted method in anon struct).
 //
 // @pointsto a | b | c
 //
-//		A 'pointsto' expectation asserts that the points-to set of its
-//		operand contains exactly the set of labels {a,b,c} notated as per
-//		labelString.
+//   A 'pointsto' expectation asserts that the points-to set of its
+//   operand contains exactly the set of labels {a,b,c} notated as per
+//   labelString.
 //
-//		A 'pointsto' expectation must appear on the same line as a
-//		print(x) statement; the expectation's operand is x.
+//   A 'pointsto' expectation must appear on the same line as a
+//   print(x) statement; the expectation's operand is x.
 //
-//		If one of the strings is "...", the expectation asserts that the
-//		points-to set at least the other labels.
+//   If one of the strings is "...", the expectation asserts that the
+//   points-to set at least the other labels.
 //
-//		We use '|' because label names may contain spaces, e.g.  methods
-//		of anonymous structs.
+//   We use '|' because label names may contain spaces, e.g.  methods
+//   of anonymous structs.
 //
-//	 Assertions within generic functions are treated as a union of all
-//	 of the instantiations.
-//
-//		From a theoretical perspective, concrete types in interfaces are
-//		labels too, but they are represented differently and so have a
-//		different expectation, @types, below.
+//   From a theoretical perspective, concrete types in interfaces are
+//   labels too, but they are represented differently and so have a
+//   different expectation, @types, below.
 //
 // @types t | u | v
 //
-//		A 'types' expectation asserts that the set of possible dynamic
-//		types of its interface operand is exactly {t,u,v}, notated per
-//		go/types.Type.String(). In other words, it asserts that the type
-//		component of the interface may point to that set of concrete type
-//		literals.  It also works for reflect.Value, though the types
-//		needn't be concrete in that case.
+//   A 'types' expectation asserts that the set of possible dynamic
+//   types of its interface operand is exactly {t,u,v}, notated per
+//   go/types.Type.String(). In other words, it asserts that the type
+//   component of the interface may point to that set of concrete type
+//   literals.  It also works for reflect.Value, though the types
+//   needn't be concrete in that case.
 //
-//		A 'types' expectation must appear on the same line as a
-//		print(x) statement; the expectation's operand is x.
+//   A 'types' expectation must appear on the same line as a
+//   print(x) statement; the expectation's operand is x.
 //
-//		If one of the strings is "...", the expectation asserts that the
-//		interface's type may point to at least the other types.
+//   If one of the strings is "...", the expectation asserts that the
+//   interface's type may point to at least the other types.
 //
-//		We use '|' because type names may contain spaces.
-//
-//	 Assertions within generic functions are treated as a union of all
-//	 of the instantiations.
+//   We use '|' because type names may contain spaces.
 //
 // @warning "regexp"
 //
-//	A 'warning' expectation asserts that the analysis issues a
-//	warning that matches the regular expression within the string
-//	literal.
+//   A 'warning' expectation asserts that the analysis issues a
+//   warning that matches the regular expression within the string
+//   literal.
 //
 // @line id
 //
-//	A line directive associates the name "id" with the current
-//	file:line.  The string form of labels will use this id instead of
-//	a file:line, making @pointsto expectations more robust against
-//	perturbations in the source file.
-//	(NB, anon functions still include line numbers.)
+//   A line directive associates the name "id" with the current
+//   file:line.  The string form of labels will use this id instead of
+//   a file:line, making @pointsto expectations more robust against
+//   perturbations in the source file.
+//   (NB, anon functions still include line numbers.)
+//
 type expectation struct {
-	kind     string // "pointsto" | "pointstoquery" | "types" | "calls" | "warning"
-	filepath string
+	kind     string // "pointsto" | "types" | "calls" | "warning"
+	filename string
 	linenum  int // source line number, 1-based
 	args     []string
-	query    string             // extended query
-	extended []*pointer.Pointer // extended query pointer [per instantiation]
-	types    []types.Type       // for types
+	types    []types.Type // for types
 }
 
 func (e *expectation) String() string {
@@ -146,109 +134,65 @@ func (e *expectation) String() string {
 }
 
 func (e *expectation) errorf(format string, args ...interface{}) {
-	fmt.Printf("%s:%d: ", e.filepath, e.linenum)
+	fmt.Printf("%s:%d: ", e.filename, e.linenum)
 	fmt.Printf(format, args...)
 	fmt.Println()
 }
 
 func (e *expectation) needsProbe() bool {
-	return e.kind == "pointsto" || e.kind == "pointstoquery" || e.kind == "types"
+	return e.kind == "pointsto" || e.kind == "types"
 }
 
-// Find probes (call to print(x)) of same source file/line as expectation.
-//
-// May match multiple calls for different instantiations.
-func findProbes(prog *ssa.Program, probes map[*ssa.CallCommon]bool, e *expectation) []*ssa.CallCommon {
-	var calls []*ssa.CallCommon
+// Find probe (call to print(x)) of same source file/line as expectation.
+func findProbe(prog *ssa.Program, probes map[*ssa.CallCommon]bool, queries map[ssa.Value]pointer.Pointer, e *expectation) (site *ssa.CallCommon, pts pointer.PointsToSet) {
 	for call := range probes {
 		pos := prog.Fset.Position(call.Pos())
-		if pos.Line == e.linenum && pos.Filename == e.filepath {
+		if pos.Line == e.linenum && pos.Filename == e.filename {
 			// TODO(adonovan): send this to test log (display only on failure).
 			// fmt.Printf("%s:%d: info: found probe for %s: %s\n",
-			// 	e.filepath, e.linenum, e, p.arg0) // debugging
-			calls = append(calls, call)
+			// 	e.filename, e.linenum, e, p.arg0) // debugging
+			return call, queries[call.Args[0]].PointsTo()
 		}
 	}
-	return calls
+	return // e.g. analysis didn't reach this call
 }
 
-// Find points to sets of probes (call to print(x)).
-func probesPointTo(calls []*ssa.CallCommon, queries map[ssa.Value]pointer.Pointer) []pointer.PointsToSet {
-	ptss := make([]pointer.PointsToSet, len(calls))
-	for i, call := range calls {
-		ptss[i] = queries[call.Args[0]].PointsTo()
-	}
-	return ptss
-}
+func doOneInput(input, filename string) bool {
+	var conf loader.Config
 
-// Find the types of the probes (call to print(x)).
-// Returns an error if type of the probe cannot point.
-func probesPointToTypes(calls []*ssa.CallCommon) ([]types.Type, error) {
-	tProbes := make([]types.Type, len(calls))
-	for i, call := range calls {
-		tProbes[i] = call.Args[0].Type()
-		if !pointer.CanPoint(tProbes[i]) {
-			return nil, fmt.Errorf("expectation on non-pointerlike operand: %s", tProbes[i])
-		}
-	}
-	return tProbes, nil
-}
-
-func doOneInput(t *testing.T, input, fpath string) bool {
-	cfg := &packages.Config{
-		Mode:  packages.LoadAllSyntax,
-		Tests: true,
-	}
-	pkgs, err := packages.Load(cfg, fpath)
+	// Parsing.
+	f, err := conf.ParseFile(filename, input)
 	if err != nil {
 		fmt.Println(err)
 		return false
 	}
-	if packages.PrintErrors(pkgs) > 0 {
-		fmt.Println("loaded packages have errors")
+
+	// Create single-file main package and import its dependencies.
+	conf.CreateFromFiles("main", f)
+	iprog, err := conf.Load()
+	if err != nil {
+		fmt.Println(err)
 		return false
 	}
+	mainPkgInfo := iprog.Created[0].Pkg
 
 	// SSA creation + building.
-	mode := ssa.SanityCheckFunctions | ssa.InstantiateGenerics
-	prog, ssaPkgs := ssautil.AllPackages(pkgs, mode)
+	prog := ssautil.CreateProgram(iprog, ssa.SanityCheckFunctions)
 	prog.Build()
 
-	// main underlying packages.Package.
-	mainPpkg := pkgs[0]
-	mainpkg := ssaPkgs[0]
+	mainpkg := prog.Package(mainPkgInfo)
 	ptrmain := mainpkg // main package for the pointer analysis
 	if mainpkg.Func("main") == nil {
-		// For test programs without main, such as testdata/a_test.go,
-		// the package with the original code is "main [main.test]" and
-		// the package with the main is "main.test".
-		for i, pkg := range pkgs {
-			if pkg.ID == mainPpkg.ID+".test" {
-				ptrmain = ssaPkgs[i]
-			} else if pkg.ID == fmt.Sprintf("%s [%s.test]", mainPpkg.ID, mainPpkg.ID) {
-				mainpkg = ssaPkgs[i]
-			}
-		}
-	}
-
-	// files in mainPpkg.
-	mainFiles := make(map[*token.File]bool)
-	for _, syn := range mainPpkg.Syntax {
-		mainFiles[prog.Fset.File(syn.Pos())] = true
+		// No main function; assume it's a test.
+		ptrmain = prog.CreateTestMainPackage(mainpkg)
 	}
 
 	// Find all calls to the built-in print(x).  Analytically,
 	// print is a no-op, but it's a convenient hook for testing
 	// the PTS of an expression, so our tests use it.
-	// Exclude generic bodies as these should be dead code for pointer.
-	// Instance of generics are included.
 	probes := make(map[*ssa.CallCommon]bool)
 	for fn := range ssautil.AllFunctions(prog) {
-		if isGenericBody(fn) {
-			continue // skip generic bodies
-		}
-		// TODO(taking): Switch to a more principled check like fn.declaredPackage() == mainPkg if Origin is exported.
-		if fn.Pkg == mainpkg || (fn.Pkg == nil && mainFiles[prog.Fset.File(fn.Pos())]) {
+		if fn.Pkg == mainpkg {
 			for _, b := range fn.Blocks {
 				for _, instr := range b.Instrs {
 					if instr, ok := instr.(ssa.CallInstruction); ok {
@@ -275,14 +219,14 @@ func doOneInput(t *testing.T, input, fpath string) bool {
 		if matches := re.FindAllStringSubmatch(line, -1); matches != nil {
 			match := matches[0]
 			kind, rest := match[1], match[2]
-			e := &expectation{kind: kind, filepath: fpath, linenum: linenum}
+			e := &expectation{kind: kind, filename: filename, linenum: linenum}
 
 			if kind == "line" {
 				if rest == "" {
 					ok = false
 					e.errorf("@%s expectation requires identifier", kind)
 				} else {
-					lineMapping[fmt.Sprintf("%s:%d", fpath, linenum)] = rest
+					lineMapping[fmt.Sprintf("%s:%d", filename, linenum)] = rest
 				}
 				continue
 			}
@@ -297,15 +241,11 @@ func doOneInput(t *testing.T, input, fpath string) bool {
 			case "pointsto":
 				e.args = split(rest, "|")
 
-			case "pointstoquery":
-				args := strings.SplitN(rest, " ", 2)
-				e.query = args[0]
-				e.args = split(args[1], "|")
 			case "types":
 				for _, typstr := range split(rest, "|") {
 					var t types.Type = types.Typ[types.Invalid] // means "..."
 					if typstr != "..." {
-						tv, err := types.Eval(prog.Fset, mainpkg.Pkg, mainPpkg.Syntax[0].Pos(), typstr)
+						tv, err := types.Eval(prog.Fset, mainpkg.Pkg, f.Pos(), typstr)
 						if err != nil {
 							ok = false
 							// Don't print err since its location is bad.
@@ -348,7 +288,7 @@ func doOneInput(t *testing.T, input, fpath string) bool {
 	}
 
 	var log bytes.Buffer
-	fmt.Fprintf(&log, "Input: %s\n", fpath)
+	fmt.Fprintf(&log, "Input: %s\n", filename)
 
 	// Run the analysis.
 	config := &pointer.Config{
@@ -359,16 +299,6 @@ func doOneInput(t *testing.T, input, fpath string) bool {
 	}
 	for probe := range probes {
 		v := probe.Args[0]
-		pos := prog.Fset.Position(probe.Pos())
-		for _, e := range exps {
-			if e.linenum == pos.Line && e.filepath == pos.Filename && e.kind == "pointstoquery" {
-				extended, err := config.AddExtendedQuery(v, e.query)
-				if err != nil {
-					panic(err)
-				}
-				e.extended = append(e.extended, extended)
-			}
-		}
 		if pointer.CanPoint(v.Type()) {
 			config.AddQuery(v)
 		}
@@ -389,42 +319,31 @@ func doOneInput(t *testing.T, input, fpath string) bool {
 
 	// Check the expectations.
 	for _, e := range exps {
-		var tProbes []types.Type
-		var calls []*ssa.CallCommon
-		var ptss []pointer.PointsToSet
+		var call *ssa.CallCommon
+		var pts pointer.PointsToSet
+		var tProbe types.Type
 		if e.needsProbe() {
-			calls = findProbes(prog, probes, e)
-			if len(calls) == 0 {
+			if call, pts = findProbe(prog, probes, result.Queries, e); call == nil {
 				ok = false
 				e.errorf("unreachable print() statement has expectation %s", e)
 				continue
 			}
-			if e.extended == nil {
-				ptss = probesPointTo(calls, result.Queries)
-			} else {
-				ptss = make([]pointer.PointsToSet, len(e.extended))
-				for i, p := range e.extended {
-					ptss[i] = p.PointsTo()
-				}
-			}
-
-			var err error
-			tProbes, err = probesPointToTypes(calls)
-			if err != nil {
+			tProbe = call.Args[0].Type()
+			if !pointer.CanPoint(tProbe) {
 				ok = false
-				e.errorf(err.Error())
+				e.errorf("expectation on non-pointerlike operand: %s", tProbe)
 				continue
 			}
 		}
 
 		switch e.kind {
-		case "pointsto", "pointstoquery":
-			if !checkPointsToExpectation(e, ptss, lineMapping, prog) {
+		case "pointsto":
+			if !checkPointsToExpectation(e, pts, lineMapping, prog) {
 				ok = false
 			}
 
 		case "types":
-			if !checkTypesExpectation(e, ptss, tProbes) {
+			if !checkTypesExpectation(e, pts, tProbe) {
 				ok = false
 			}
 
@@ -469,7 +388,7 @@ func labelString(l *pointer.Label, lineMapping map[string]string, prog *ssa.Prog
 	return str
 }
 
-func checkPointsToExpectation(e *expectation, ptss []pointer.PointsToSet, lineMapping map[string]string, prog *ssa.Program) bool {
+func checkPointsToExpectation(e *expectation, pts pointer.PointsToSet, lineMapping map[string]string, prog *ssa.Program) bool {
 	expected := make(map[string]int)
 	surplus := make(map[string]int)
 	exact := true
@@ -482,14 +401,12 @@ func checkPointsToExpectation(e *expectation, ptss []pointer.PointsToSet, lineMa
 	}
 	// Find the set of labels that the probe's
 	// argument (x in print(x)) may point to.
-	for _, pts := range ptss { // treat ptss as union of points-to sets.
-		for _, label := range pts.Labels() {
-			name := labelString(label, lineMapping, prog)
-			if expected[name] > 0 {
-				expected[name]--
-			} else if exact {
-				surplus[name]++
-			}
+	for _, label := range pts.Labels() {
+		name := labelString(label, lineMapping, prog)
+		if expected[name] > 0 {
+			expected[name]--
+		} else if exact {
+			surplus[name]++
 		}
 	}
 	// Report multiset difference:
@@ -511,7 +428,7 @@ func checkPointsToExpectation(e *expectation, ptss []pointer.PointsToSet, lineMa
 	return ok
 }
 
-func checkTypesExpectation(e *expectation, ptss []pointer.PointsToSet, typs []types.Type) bool {
+func checkTypesExpectation(e *expectation, pts pointer.PointsToSet, typ types.Type) bool {
 	var expected typeutil.Map
 	var surplus typeutil.Map
 	exact := true
@@ -523,26 +440,18 @@ func checkTypesExpectation(e *expectation, ptss []pointer.PointsToSet, typs []ty
 		expected.Set(g, struct{}{})
 	}
 
-	if len(typs) != len(ptss) {
-		e.errorf("@types expectation internal error differing number of types(%d) and points to sets (%d)", len(typs), len(ptss))
+	if !pointer.CanHaveDynamicTypes(typ) {
+		e.errorf("@types expectation requires an interface- or reflect.Value-typed operand, got %s", typ)
 		return false
 	}
 
 	// Find the set of types that the probe's
 	// argument (x in print(x)) may contain.
-	for i := range ptss {
-		var Ts []types.Type
-		if pointer.CanHaveDynamicTypes(typs[i]) {
-			Ts = ptss[i].DynamicTypes().Keys()
-		} else {
-			Ts = append(Ts, typs[i]) // static type
-		}
-		for _, T := range Ts {
-			if expected.At(T) != nil {
-				expected.Delete(T)
-			} else if exact {
-				surplus.Set(T, struct{}{})
-			}
+	for _, T := range pts.DynamicTypes().Keys() {
+		if expected.At(T) != nil {
+			expected.Delete(T)
+		} else if exact {
+			surplus.Set(T, struct{}{})
 		}
 	}
 	// Report set difference:
@@ -569,7 +478,7 @@ func checkCallsExpectation(prog *ssa.Program, e *expectation, cg *callgraph.Grap
 		if edge.Caller.Func.String() == e.args[0] {
 			calleeStr := edge.Callee.Func.String()
 			if calleeStr == e.args[1] {
-				return errOK // expectation satisfied; stop the search
+				return errOK // expectation satisified; stop the search
 			}
 			found[calleeStr]++
 		}
@@ -595,7 +504,7 @@ func checkWarningExpectation(prog *ssa.Program, e *expectation, warnings []point
 	}
 
 	if len(warnings) == 0 {
-		e.errorf("@warning %q expectation, but no warnings", e.args[0])
+		e.errorf("@warning %s expectation, but no warnings", strconv.Quote(e.args[0]))
 		return false
 	}
 
@@ -605,7 +514,7 @@ func checkWarningExpectation(prog *ssa.Program, e *expectation, warnings []point
 		}
 	}
 
-	e.errorf("@warning %q expectation not satisfied; found these warnings though:", e.args[0])
+	e.errorf("@warning %s expectation not satised; found these warnings though:", strconv.Quote(e.args[0]))
 	for _, w := range warnings {
 		fmt.Printf("%s: warning: %s\n", prog.Fset.Position(w.Pos), w.Message)
 	}
@@ -613,9 +522,7 @@ func checkWarningExpectation(prog *ssa.Program, e *expectation, warnings []point
 }
 
 func TestInput(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode; this test requires tons of memory; https://golang.org/issue/14113")
-	}
+	ok := true
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -630,44 +537,19 @@ func TestInput(t *testing.T) {
 	fmt.Fprintf(os.Stderr, "Entering directory `%s'\n", wd)
 
 	for _, filename := range inputs {
-		filename := filename
-		t.Run(filename, func(t *testing.T) {
-			if filename == "testdata/a_test.go" {
-				// For some reason this particular file is way more expensive than the others.
-				if unsafe.Sizeof(unsafe.Pointer(nil)) <= 4 {
-					t.Skip("skipping memory-intensive test on platform with small address space; https://golang.org/issue/14113")
-				}
-				if raceEnabled {
-					t.Skip("skipping memory-intensive test under race detector; https://golang.org/issue/14113")
-				}
-			} else {
-				t.Parallel()
-			}
+		content, err := ioutil.ReadFile(filename)
+		if err != nil {
+			t.Errorf("couldn't read file '%s': %s", filename, err)
+			continue
+		}
 
-			content, err := ioutil.ReadFile(filename)
-			if err != nil {
-				t.Fatalf("couldn't read file '%s': %s", filename, err)
-			}
-
-			fpath, err := filepath.Abs(filename)
-			if err != nil {
-				t.Fatalf("couldn't get absolute path for '%s': %s", filename, err)
-			}
-
-			if !doOneInput(t, string(content), fpath) {
-				t.Fail()
-			}
-		})
+		if !doOneInput(string(content), filename) {
+			ok = false
+		}
 	}
-}
-
-// isGenericBody returns true if fn is the body of a generic function.
-func isGenericBody(fn *ssa.Function) bool {
-	sig := fn.Signature
-	if typeparams.ForSignature(sig).Len() > 0 || typeparams.RecvTypeParams(sig).Len() > 0 {
-		return fn.Synthetic == ""
+	if !ok {
+		t.Fail()
 	}
-	return false
 }
 
 // join joins the elements of multiset with " | "s.
@@ -693,35 +575,4 @@ func split(s, sep string) (r []string) {
 		}
 	}
 	return
-}
-
-func TestTypeParam(t *testing.T) {
-	if !typeparams.Enabled {
-		t.Skip("TestTypeParamInput requires type parameters")
-	}
-	// Based on TestInput. Keep this up to date with that.
-	filename := "testdata/typeparams.go"
-
-	if testing.Short() {
-		t.Skip("skipping in short mode; this test requires tons of memory; https://golang.org/issue/14113")
-	}
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("os.Getwd: %s", err)
-	}
-	fmt.Fprintf(os.Stderr, "Entering directory `%s'\n", wd)
-
-	content, err := ioutil.ReadFile(filename)
-	if err != nil {
-		t.Fatalf("couldn't read file '%s': %s", filename, err)
-	}
-	fpath, err := filepath.Abs(filename)
-	if err != nil {
-		t.Errorf("couldn't get absolute path for '%s': %s", filename, err)
-	}
-
-	if !doOneInput(t, string(content), fpath) {
-		t.Fail()
-	}
 }

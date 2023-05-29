@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // This file implements writing of types. The functionality is lifted
 // directly from go/types, but now contains various modifications for
 // nicer output.
@@ -12,7 +14,7 @@
 
 package main
 
-import "go/types"
+import "golang.org/x/tools/go/types"
 
 func (p *printer) writeType(this *types.Package, typ types.Type) {
 	p.writeTypeInternal(this, typ, make([]types.Type, 8))
@@ -133,7 +135,7 @@ func (p *printer) writeTypeInternal(this *types.Package, typ types.Type, visited
 				p.print("\n")
 			}
 			for i, n := 0, t.NumEmbeddeds(); i < n; i++ {
-				typ := t.EmbeddedType(i)
+				typ := t.Embedded(i)
 				p.writeTypeInternal(this, typ, visited)
 				p.print("\n")
 			}

@@ -8,12 +8,10 @@ import (
 	"html/template"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"golang.org/x/tools/present"
 )
@@ -22,33 +20,30 @@ func init() {
 	http.HandleFunc("/", dirHandler)
 }
 
-// dirHandler serves a directory listing for the requested path, rooted at *contentPath.
+// dirHandler serves a directory listing for the requested path, rooted at basePath.
 func dirHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/favicon.ico" {
-		http.NotFound(w, r)
+		http.Error(w, "not found", 404)
 		return
 	}
-	name := filepath.Join(*contentPath, r.URL.Path)
+	const base = "."
+	name := filepath.Join(base, r.URL.Path)
 	if isDoc(name) {
 		err := renderDoc(w, name)
 		if err != nil {
 			log.Println(err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), 500)
 		}
 		return
 	}
 	if isDir, err := dirList(w, name); err != nil {
-		addr, _, e := net.SplitHostPort(r.RemoteAddr)
-		if e != nil {
-			addr = r.RemoteAddr
-		}
-		log.Printf("request from %s: %s", addr, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Println(err)
+		http.Error(w, err.Error(), 500)
 		return
 	} else if isDir {
 		return
 	}
-	http.FileServer(http.Dir(*contentPath)).ServeHTTP(w, r)
+	http.FileServer(http.Dir(base)).ServeHTTP(w, r)
 }
 
 func isDoc(path string) bool {
@@ -88,7 +83,11 @@ func initTemplates(base string) error {
 
 	var err error
 	dirListTemplate, err = template.ParseFiles(filepath.Join(base, "templates/dir.tmpl"))
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // renderDoc reads the present file, gets its template representation,
@@ -113,7 +112,7 @@ func parse(name string, mode present.ParseMode) (*present.Doc, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return present.Parse(f, name, mode)
+	return present.Parse(f, name, 0)
 }
 
 // dirList scans the given path and writes a directory listing to w.
@@ -138,9 +137,7 @@ func dirList(w io.Writer, name string) (isDir bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	strippedPath := strings.TrimPrefix(name, filepath.Clean(*contentPath))
-	strippedPath = strings.TrimPrefix(strippedPath, "/")
-	d := &dirListData{Path: strippedPath}
+	d := &dirListData{Path: name}
 	for _, fi := range fis {
 		// skip the golang.org directory
 		if name == "." && fi.Name() == "golang.org" {
@@ -148,16 +145,15 @@ func dirList(w io.Writer, name string) (isDir bool, err error) {
 		}
 		e := dirEntry{
 			Name: fi.Name(),
-			Path: filepath.ToSlash(filepath.Join(strippedPath, fi.Name())),
+			Path: filepath.ToSlash(filepath.Join(name, fi.Name())),
 		}
 		if fi.IsDir() && showDir(e.Name) {
 			d.Dirs = append(d.Dirs, e)
 			continue
 		}
 		if isDoc(e.Name) {
-			fn := filepath.ToSlash(filepath.Join(name, fi.Name()))
-			if p, err := parse(fn, present.TitlesOnly); err != nil {
-				log.Printf("parse(%q, present.TitlesOnly): %v", fn, err)
+			if p, err := parse(e.Path, present.TitlesOnly); err != nil {
+				log.Println(err)
 			} else {
 				e.Title = p.Title
 			}

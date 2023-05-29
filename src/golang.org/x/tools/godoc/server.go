@@ -7,7 +7,6 @@ package godoc
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -30,7 +29,6 @@ import (
 	"golang.org/x/tools/godoc/analysis"
 	"golang.org/x/tools/godoc/util"
 	"golang.org/x/tools/godoc/vfs"
-	"golang.org/x/tools/internal/typeparams"
 )
 
 // handlerServer is a migration from an old godoc http Handler type.
@@ -48,28 +46,26 @@ func (s *handlerServer) registerWithMux(mux *http.ServeMux) {
 	mux.Handle(s.pattern, s)
 }
 
-// GetPageInfo returns the PageInfo for a package directory abspath. If the
+// getPageInfo returns the PageInfo for a package directory abspath. If the
 // parameter genAST is set, an AST containing only the package exports is
 // computed (PageInfo.PAst), otherwise package documentation (PageInfo.Doc)
 // is extracted from the AST. If there is no corresponding package in the
 // directory, PageInfo.PAst and PageInfo.PDoc are nil. If there are no sub-
 // directories, PageInfo.Dirs is nil. If an error occurred, PageInfo.Err is
 // set to the respective error but the error is not logged.
-func (h *handlerServer) GetPageInfo(abspath, relpath string, mode PageInfoMode, goos, goarch string) *PageInfo {
-	info := &PageInfo{Dirname: abspath, Mode: mode}
+//
+func (h *handlerServer) GetPageInfo(abspath, relpath string, mode PageInfoMode) *PageInfo {
+	info := &PageInfo{Dirname: abspath}
 
 	// Restrict to the package files that would be used when building
 	// the package on this system.  This makes sure that if there are
 	// separate implementations for, say, Windows vs Unix, we don't
 	// jumble them all together.
-	// Note: If goos/goarch aren't set, the current binary's GOOS/GOARCH
-	// are used.
+	// Note: Uses current binary's GOOS/GOARCH.
+	// To use different pair, such as if we allowed the user to choose,
+	// set ctxt.GOOS and ctxt.GOARCH before calling ctxt.ImportDir.
 	ctxt := build.Default
 	ctxt.IsAbsPath = pathpkg.IsAbs
-	ctxt.IsDir = func(path string) bool {
-		fi, err := h.c.fs.Stat(filepath.ToSlash(path))
-		return err == nil && fi.IsDir()
-	}
 	ctxt.ReadDir = func(dir string) ([]os.FileInfo, error) {
 		f, err := h.c.fs.ReadDir(filepath.ToSlash(dir))
 		filtered := make([]os.FileInfo, 0, len(f))
@@ -86,21 +82,6 @@ func (h *handlerServer) GetPageInfo(abspath, relpath string, mode PageInfoMode, 
 			return nil, err
 		}
 		return ioutil.NopCloser(bytes.NewReader(data)), nil
-	}
-
-	// Make the syscall/js package always visible by default.
-	// It defaults to the host's GOOS/GOARCH, and golang.org's
-	// linux/amd64 means the wasm syscall/js package was blank.
-	// And you can't run godoc on js/wasm anyway, so host defaults
-	// don't make sense here.
-	if goos == "" && goarch == "" && relpath == "syscall/js" {
-		goos, goarch = "js", "wasm"
-	}
-	if goos != "" {
-		ctxt.GOOS = goos
-	}
-	if goarch != "" {
-		ctxt.GOARCH = goarch
 	}
 
 	pkginfo, err := ctxt.ImportDir(abspath, 0)
@@ -208,17 +189,14 @@ func (h *handlerServer) GetPageInfo(abspath, relpath string, mode PageInfoMode, 
 		timestamp = ts
 	}
 	if dir == nil {
-		// TODO(agnivade): handle this case better, now since there is no CLI mode.
-		// no directory tree present (happens in command-line mode);
-		// compute 2 levels for this page. The second level is to
-		// get the synopses of sub-directories.
+		// no directory tree present (too early after startup or
+		// command-line mode); compute one level for this page
 		// note: cannot use path filter here because in general
-		// it doesn't contain the FSTree path
-		dir = h.c.newDirectory(abspath, 2)
+		//       it doesn't contain the FSTree path
+		dir = h.c.newDirectory(abspath, 1)
 		timestamp = time.Now()
 	}
 	info.Dirs = dir.listing(true, func(path string) bool { return h.includePath(path, mode) })
-
 	info.DirTime = timestamp
 	info.DirFlat = mode&FlatDir != 0
 
@@ -237,9 +215,9 @@ func (h *handlerServer) includePath(path string, mode PageInfoMode) (r bool) {
 	if mode&NoFiltering != 0 {
 		return true
 	}
-	if strings.Contains(path, "internal") || strings.Contains(path, "vendor") {
+	if strings.Contains(path, "internal") {
 		for _, c := range strings.Split(filepath.Clean(path), string(os.PathSeparator)) {
-			if c == "internal" || c == "vendor" {
+			if c == "internal" {
 				return false
 			}
 		}
@@ -259,24 +237,20 @@ func (h *handlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	relpath := pathpkg.Clean(r.URL.Path[len(h.stripPrefix)+1:])
-
-	if !h.corpusInitialized() {
-		h.p.ServeError(w, r, relpath, errors.New("Scan is not yet complete. Please retry after a few moments"))
-		return
-	}
-
 	abspath := pathpkg.Join(h.fsRoot, relpath)
 	mode := h.p.GetPageInfoMode(r)
 	if relpath == builtinPkgPath {
-		// The fake built-in package contains unexported identifiers,
-		// but we want to show them. Also, disable type association,
-		// since it's not helpful for this fake package (see issue 6645).
-		mode |= NoFiltering | NoTypeAssoc
+		mode = NoFiltering | NoTypeAssoc
 	}
-	info := h.GetPageInfo(abspath, relpath, mode, r.FormValue("GOOS"), r.FormValue("GOARCH"))
+	info := h.GetPageInfo(abspath, relpath, mode)
 	if info.Err != nil {
 		log.Print(info.Err)
 		h.p.ServeError(w, r, relpath, info.Err)
+		return
+	}
+
+	if mode&NoHTML != 0 {
+		h.p.ServeText(w, applyTemplate(h.p.PackageText, "packageText", info))
 		return
 	}
 
@@ -319,7 +293,6 @@ func (h *handlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Emit JSON array for type information.
 	pi := h.c.Analysis.PackageInfo(relpath)
-	hasTreeView := len(pi.CallGraph) != 0
 	info.CallGraphIndex = pi.CallGraphIndex
 	info.CallGraph = htmltemplate.JS(marshalJSON(pi.CallGraph))
 	info.AnalysisData = htmltemplate.JS(marshalJSON(pi.Types))
@@ -328,37 +301,25 @@ func (h *handlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		info.TypeInfoIndex[ti.Name] = i
 	}
 
-	var body []byte
-	if info.Dirname == "/src" {
-		body = applyTemplate(h.p.PackageRootHTML, "packageRootHTML", info)
-	} else {
-		body = applyTemplate(h.p.PackageHTML, "packageHTML", info)
-	}
+	info.Share = allowShare(r)
 	h.p.ServePage(w, Page{
 		Title:    title,
 		Tabtitle: tabtitle,
 		Subtitle: subtitle,
-		Body:     body,
-		TreeView: hasTreeView,
+		Body:     applyTemplate(h.p.PackageHTML, "packageHTML", info),
+		Share:    info.Share,
 	})
-}
-
-func (h *handlerServer) corpusInitialized() bool {
-	h.c.initMu.RLock()
-	defer h.c.initMu.RUnlock()
-	return h.c.initDone
 }
 
 type PageInfoMode uint
 
 const (
-	PageInfoModeQueryString = "m" // query string where PageInfoMode is stored
-
 	NoFiltering PageInfoMode = 1 << iota // do not filter exports
 	AllMethods                           // show all embedded methods
 	ShowSource                           // show source code, do not extract documentation
+	NoHTML                               // show result in textual form, do not generate HTML
 	FlatDir                              // show directory in a flat (non-indented) manner
-	NoTypeAssoc                          // don't associate consts, vars, and factory functions with types (not exposed via ?m= query parameter, used for package builtin, see issue 6645)
+	NoTypeAssoc                          // don't associate consts, vars, and factory functions with types
 )
 
 // modeNames defines names for each PageInfoMode flag.
@@ -366,27 +327,8 @@ var modeNames = map[string]PageInfoMode{
 	"all":     NoFiltering,
 	"methods": AllMethods,
 	"src":     ShowSource,
+	"text":    NoHTML,
 	"flat":    FlatDir,
-}
-
-// generate a query string for persisting PageInfoMode between pages.
-func modeQueryString(mode PageInfoMode) string {
-	if modeNames := mode.names(); len(modeNames) > 0 {
-		return "?m=" + strings.Join(modeNames, ",")
-	}
-	return ""
-}
-
-// alphabetically sorted names of active flags for a PageInfoMode.
-func (m PageInfoMode) names() []string {
-	var names []string
-	for name, mode := range modeNames {
-		if m&mode != 0 {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
 }
 
 // GetPageInfoMode computes the PageInfoMode flags by analyzing the request
@@ -394,7 +336,7 @@ func (m PageInfoMode) names() []string {
 // as defined by modeNames (e.g.: m=src,text).
 func (p *Presentation) GetPageInfoMode(r *http.Request) PageInfoMode {
 	var mode PageInfoMode
-	for _, k := range strings.Split(r.FormValue(PageInfoModeQueryString), ",") {
+	for _, k := range strings.Split(r.FormValue("m"), ",") {
 		if m, found := modeNames[strings.TrimSpace(k)]; found {
 			mode |= m
 		}
@@ -410,6 +352,7 @@ func (p *Presentation) GetPageInfoMode(r *http.Request) PageInfoMode {
 // (as is the convention for packages). This is sufficient
 // to resolve package identifiers without doing an actual
 // import. It never returns an error.
+//
 func poorMansImporter(imports map[string]*ast.Object, path string) (*ast.Object, error) {
 	pkg := imports[path]
 	if pkg == nil {
@@ -461,19 +404,12 @@ func addNames(names map[string]bool, decl ast.Decl) {
 	case *ast.FuncDecl:
 		name := d.Name.Name
 		if d.Recv != nil {
-			r := d.Recv.List[0].Type
-			if rr, isstar := r.(*ast.StarExpr); isstar {
-				r = rr.X
-			}
-
 			var typeName string
-			switch x := r.(type) {
+			switch r := d.Recv.List[0].Type.(type) {
+			case *ast.StarExpr:
+				typeName = r.X.(*ast.Ident).Name
 			case *ast.Ident:
-				typeName = x.Name
-			case *ast.IndexExpr:
-				typeName = x.X.(*ast.Ident).Name
-			case *typeparams.IndexListExpr:
-				typeName = x.X.(*ast.Ident).Name
+				typeName = r.Name
 			}
 			name = typeName + "_" + name
 		}
@@ -496,6 +432,7 @@ func addNames(names map[string]bool, decl ast.Decl) {
 // which correctly updates each package file's comment list.
 // (The ast.PackageExports signature is frozen, hence the local
 // implementation).
+//
 func packageExports(fset *token.FileSet, pkg *ast.Package) {
 	for _, src := range pkg.Files {
 		cmap := ast.NewCommentMap(fset, src, src.Comments)
@@ -576,7 +513,7 @@ func (p *Presentation) serveTextFile(w http.ResponseWriter, r *http.Request, abs
 		return
 	}
 
-	if r.FormValue(PageInfoModeQueryString) == "text" {
+	if r.FormValue("m") == "text" {
 		p.ServeText(w, src)
 		return
 	}
@@ -609,15 +546,16 @@ func (p *Presentation) serveTextFile(w http.ResponseWriter, r *http.Request, abs
 	fmt.Fprintf(&buf, `<p><a href="/%s?m=text">View as plain text</a></p>`, htmlpkg.EscapeString(relpath))
 
 	p.ServePage(w, Page{
-		Title:    title,
-		SrcPath:  relpath,
+		Title:    title + " " + relpath,
 		Tabtitle: relpath,
 		Body:     buf.Bytes(),
+		Share:    allowShare(r),
 	})
 }
 
 // formatGoSource HTML-escapes Go source text and writes it to w,
 // decorating it with the specified analysis links.
+//
 func formatGoSource(buf *bytes.Buffer, text []byte, links []analysis.Link, pattern string, selection Selection) {
 	// Emit to a temp buffer so that we can add line anchors at the end.
 	saved, buf := buf, new(bytes.Buffer)
@@ -650,24 +588,7 @@ func formatGoSource(buf *bytes.Buffer, text []byte, links []analysis.Link, patte
 	// linkWriter, so we have to add line spans as another pass.
 	n := 1
 	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
-		// The line numbers are inserted into the document via a CSS ::before
-		// pseudo-element. This prevents them from being copied when users
-		// highlight and copy text.
-		// ::before is supported in 98% of browsers: https://caniuse.com/#feat=css-gencontent
-		// This is also the trick Github uses to hide line numbers.
-		//
-		// The first tab for the code snippet needs to start in column 9, so
-		// it indents a full 8 spaces, hence the two nbsp's. Otherwise the tab
-		// character only indents a short amount.
-		//
-		// Due to rounding and font width Firefox might not treat 8 rendered
-		// characters as 8 characters wide, and subsequently may treat the tab
-		// character in the 9th position as moving the width from (7.5 or so) up
-		// to 8. See
-		// https://github.com/webcompat/web-bugs/issues/17530#issuecomment-402675091
-		// for a fuller explanation. The solution is to add a CSS class to
-		// explicitly declare the width to be 8 characters.
-		fmt.Fprintf(saved, `<span id="L%d" class="ln">%6d&nbsp;&nbsp;</span>`, n, n)
+		fmt.Fprintf(saved, "<span id=\"L%d\" class=\"ln\">%6d</span>\t", n, n)
 		n++
 		saved.Write(line)
 		saved.WriteByte('\n')
@@ -686,24 +607,16 @@ func (p *Presentation) serveDirectory(w http.ResponseWriter, r *http.Request, ab
 	}
 
 	p.ServePage(w, Page{
-		Title:    "Directory",
-		SrcPath:  relpath,
+		Title:    "Directory " + relpath,
 		Tabtitle: relpath,
 		Body:     applyTemplate(p.DirlistHTML, "dirlistHTML", list),
+		Share:    allowShare(r),
 	})
 }
 
 func (p *Presentation) ServeHTMLDoc(w http.ResponseWriter, r *http.Request, abspath, relpath string) {
 	// get HTML body contents
-	isMarkdown := false
 	src, err := vfs.ReadFile(p.Corpus.fs, abspath)
-	if err != nil && strings.HasSuffix(abspath, ".html") {
-		if md, errMD := vfs.ReadFile(p.Corpus.fs, strings.TrimSuffix(abspath, ".html")+".md"); errMD == nil {
-			src = md
-			isMarkdown = true
-			err = nil
-		}
-	}
 	if err != nil {
 		log.Printf("ReadFile: %s", err)
 		p.ServeError(w, r, relpath, err)
@@ -726,6 +639,7 @@ func (p *Presentation) ServeHTMLDoc(w http.ResponseWriter, r *http.Request, absp
 	page := Page{
 		Title:    meta.Title,
 		Subtitle: meta.Subtitle,
+		Share:    allowShare(r),
 	}
 
 	// evaluate as template if indicated
@@ -745,18 +659,6 @@ func (p *Presentation) ServeHTMLDoc(w http.ResponseWriter, r *http.Request, absp
 		src = buf.Bytes()
 	}
 
-	// Apply markdown as indicated.
-	// (Note template applies before Markdown.)
-	if isMarkdown {
-		html, err := renderMarkdown(src)
-		if err != nil {
-			log.Printf("executing markdown %s: %v", relpath, err)
-			p.ServeError(w, r, relpath, err)
-			return
-		}
-		src = html
-	}
-
 	// if it's the language spec, add tags to EBNF productions
 	if strings.HasSuffix(abspath, "go_spec.html") {
 		var buf bytes.Buffer
@@ -773,15 +675,9 @@ func (p *Presentation) ServeFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Presentation) serveFile(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(r.URL.Path, "/index.html") {
-		// We'll show index.html for the directory.
-		// Use the dir/ version as canonical instead of dir/index.html.
-		http.Redirect(w, r, r.URL.Path[0:len(r.URL.Path)-len("index.html")], http.StatusMovedPermanently)
-		return
-	}
+	relpath := r.URL.Path
 
 	// Check to see if we need to redirect or serve another file.
-	relpath := r.URL.Path
 	if m := p.Corpus.MetadataFor(relpath); m != nil {
 		if m.Path != relpath {
 			// Redirect to canonical path.
@@ -797,6 +693,12 @@ func (p *Presentation) serveFile(w http.ResponseWriter, r *http.Request) {
 
 	switch pathpkg.Ext(relpath) {
 	case ".html":
+		if strings.HasSuffix(relpath, "/index.html") {
+			// We'll show index.html for the directory.
+			// Use the dir/ version as canonical instead of dir/index.html.
+			http.Redirect(w, r, r.URL.Path[0:len(r.URL.Path)-len("index.html")], http.StatusMovedPermanently)
+			return
+		}
 		p.ServeHTMLDoc(w, r, abspath, relpath)
 		return
 
@@ -816,8 +718,7 @@ func (p *Presentation) serveFile(w http.ResponseWriter, r *http.Request) {
 		if redirect(w, r) {
 			return
 		}
-		index := pathpkg.Join(abspath, "index.html")
-		if util.IsTextFile(p.Corpus.fs, index) || util.IsTextFile(p.Corpus.fs, pathpkg.Join(abspath, "index.md")) {
+		if index := pathpkg.Join(abspath, "index.html"); util.IsTextFile(p.Corpus.fs, index) {
 			p.ServeHTMLDoc(w, r, index, index)
 			return
 		}

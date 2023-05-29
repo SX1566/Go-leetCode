@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -35,13 +34,13 @@ func interface1() {
 	print(j) // @types D
 	print(k) // @types *int | D
 
-	print(i.(*int)) // @pointsto command-line-arguments.a
+	print(i.(*int)) // @pointsto main.a
 	print(j.(*int)) // @pointsto
-	print(k.(*int)) // @pointsto command-line-arguments.a
+	print(k.(*int)) // @pointsto main.a
 
 	print(i.(D).ptr) // @pointsto
-	print(j.(D).ptr) // @pointsto command-line-arguments.b
-	print(k.(D).ptr) // @pointsto command-line-arguments.b
+	print(j.(D).ptr) // @pointsto main.b
+	print(k.(D).ptr) // @pointsto main.b
 }
 
 func interface2() {
@@ -55,21 +54,21 @@ func interface2() {
 	print(i) // @types *C
 	print(j) // @types D
 	print(k) // @types *C | D
-	print(k) // @pointsto makeinterface:command-line-arguments.D | makeinterface:*command-line-arguments.C
+	print(k) // @pointsto makeinterface:main.D | makeinterface:*main.C
 
 	k.f()
-	// @calls command-line-arguments.interface2 -> (*command-line-arguments.C).f
-	// @calls command-line-arguments.interface2 -> (command-line-arguments.D).f
+	// @calls main.interface2 -> (*main.C).f
+	// @calls main.interface2 -> (main.D).f
 
-	print(i.(*C))    // @pointsto command-line-arguments.a
-	print(j.(D).ptr) // @pointsto command-line-arguments.a
-	print(k.(*C))    // @pointsto command-line-arguments.a
+	print(i.(*C))    // @pointsto main.a
+	print(j.(D).ptr) // @pointsto main.a
+	print(k.(*C))    // @pointsto main.a
 
 	switch x := k.(type) {
 	case *C:
-		print(x) // @pointsto command-line-arguments.a
+		print(x) // @pointsto main.a
 	case D:
-		print(x.ptr) // @pointsto command-line-arguments.a
+		print(x.ptr) // @pointsto main.a
 	case *E:
 		print(x) // @pointsto
 	}
@@ -95,15 +94,15 @@ func interface4() {
 
 	j := i.(I)       // interface narrowing type-assertion
 	print(j)         // @types D
-	print(j.(D).ptr) // @pointsto command-line-arguments.a
+	print(j.(D).ptr) // @pointsto main.a
 
 	var l interface{} = j // interface widening assignment.
 	print(l)              // @types D
-	print(l.(D).ptr)      // @pointsto command-line-arguments.a
+	print(l.(D).ptr)      // @pointsto main.a
 
 	m := j.(interface{}) // interface widening type-assertion.
 	print(m)             // @types D
-	print(m.(D).ptr)     // @pointsto command-line-arguments.a
+	print(m.(D).ptr)     // @pointsto main.a
 }
 
 // Interface method calls and value flow:
@@ -129,19 +128,19 @@ func interface5() {
 	print(j.f(&i)) // @pointsto p.x@i5p:6
 	print(&i)      // @pointsto i@i5i:6
 
-	print(j) // @pointsto makeinterface:*command-line-arguments.P
+	print(j) // @pointsto makeinterface:*main.P
 }
 
-// @calls command-line-arguments.interface5 -> (*command-line-arguments.P).f
+// @calls main.interface5 -> (*main.P).f
 
 func interface6() {
 	f := I.f
-	print(f) // @pointsto (command-line-arguments.I).f$thunk
+	print(f) // @pointsto (main.I).f$thunk
 	f(new(struct{ D }))
 }
 
-// @calls command-line-arguments.interface6 -> (command-line-arguments.I).f$thunk
-// @calls (command-line-arguments.I).f$thunk -> (*struct{command-line-arguments.D}).f
+// @calls main.interface6 -> (main.I).f$thunk
+// @calls (main.I).f$thunk -> (*struct{main.D}).f
 
 func main() {
 	interface1()

@@ -50,7 +50,6 @@ import (
 	"index/suffixarray"
 	"io"
 	"log"
-	"math"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -83,7 +82,7 @@ type interfaceSlice struct {
 
 // A RunList is a list of entries that can be sorted according to some
 // criteria. A RunList may be compressed by grouping "runs" of entries
-// which are equal (according to the sort criteria) into a new RunList of
+// which are equal (according to the sort critera) into a new RunList of
 // runs. For instance, a RunList containing pairs (x, y) may be compressed
 // into a RunList containing pair runs (x, {y}) where each run consists of
 // a list of y's with the same x.
@@ -162,7 +161,7 @@ func newKindRun(h RunList) interface{} {
 		// bit is always the same for all infos in one
 		// list we can simply compare the entire info.
 		k := 0
-		prev := SpotInfo(math.MaxUint32) // an unlikely value
+		prev := SpotInfo(1<<32 - 1) // an unlikely value
 		for _, x := range run {
 			if x != prev {
 				run[k] = x
@@ -1360,6 +1359,7 @@ type FileLines struct {
 // LookupRegexp returns the number of matches and the matches where a regular
 // expression r is found in the full text index. At most n matches are
 // returned (thus found <= n).
+//
 func (x *Index) LookupRegexp(r *regexp.Regexp, n int) (found int, result []FileLines) {
 	if x.suffixes == nil || n <= 0 {
 		return
@@ -1429,8 +1429,18 @@ func (c *Corpus) invalidateIndex() {
 	c.refreshMetadata()
 }
 
+// indexUpToDate() returns true if the search index is not older
+// than any of the file systems under godoc's observation.
+//
+func (c *Corpus) indexUpToDate() bool {
+	_, fsTime := c.fsModified.Get()
+	_, siTime := c.searchIndex.Get()
+	return !fsTime.After(siTime)
+}
+
 // feedDirnames feeds the directory names of all directories
 // under the file system given by root to channel c.
+//
 func (c *Corpus) feedDirnames(ch chan<- string) {
 	if dir, _ := c.fsTree.Get(); dir != nil {
 		for d := range dir.(*Directory).iter(false) {
@@ -1441,6 +1451,7 @@ func (c *Corpus) feedDirnames(ch chan<- string) {
 
 // fsDirnames() returns a channel sending all directory names
 // of all the file systems under godoc's observation.
+//
 func (c *Corpus) fsDirnames() <-chan string {
 	ch := make(chan string, 256) // buffered for fewer context switches
 	go func() {
@@ -1530,6 +1541,7 @@ func (c *Corpus) RunIndexer() {
 	}
 
 	// Repeatedly update the package directory tree and index.
+	// TODO(bgarcia): Use fsnotify to only update when notified of a filesystem change.
 	for {
 		c.initFSTree()
 		c.UpdateIndex()

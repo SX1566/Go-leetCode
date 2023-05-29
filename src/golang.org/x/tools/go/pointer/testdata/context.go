@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -17,29 +16,29 @@ func context1() {
 	var t1, t2 T
 	t1.SetX(&a)
 	t2.SetX(&b)
-	print(t1.GetX()) // @pointsto command-line-arguments.a
-	print(t2.GetX()) // @pointsto command-line-arguments.b
+	print(t1.GetX()) // @pointsto main.a
+	print(t2.GetX()) // @pointsto main.b
 }
 
 func context2() {
 	id := func(x *int) *int {
-		print(x) // @pointsto command-line-arguments.a | command-line-arguments.b
+		print(x) // @pointsto main.a | main.b
 		return x
 	}
-	print(id(&a)) // @pointsto command-line-arguments.a
-	print(id(&b)) // @pointsto command-line-arguments.b
+	print(id(&a)) // @pointsto main.a
+	print(id(&b)) // @pointsto main.b
 
 	// Same again, but anon func has free vars.
 	var c int // @line context2c
 	id2 := func(x *int) (*int, *int) {
-		print(x) // @pointsto command-line-arguments.a | command-line-arguments.b
+		print(x) // @pointsto main.a | main.b
 		return x, &c
 	}
 	p, q := id2(&a)
-	print(p) // @pointsto command-line-arguments.a
+	print(p) // @pointsto main.a
 	print(q) // @pointsto c@context2c:6
 	r, s := id2(&b)
-	print(r) // @pointsto command-line-arguments.b
+	print(r) // @pointsto main.b
 	print(s) // @pointsto c@context2c:6
 }
 

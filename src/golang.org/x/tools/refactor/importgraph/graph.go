@@ -20,8 +20,6 @@ import (
 // imported packages (prerequisites); for a reverse graph, it is the set
 // of importing packages (clients).
 //
-// Graph construction inspects all imports in each package's directory,
-// including those in _test.go files, so the resulting graph may be cyclic.
 type Graph map[string]map[string]bool
 
 func (g Graph) addEdge(from, to string) {
@@ -84,7 +82,7 @@ func Build(ctxt *build.Context) (forward, reverse Graph, errors map[string]error
 				defer wg.Done()
 
 				sema <- 1
-				bp, err := ctxt.Import(path, "", 0)
+				bp, err := ctxt.Import(path, "", buildutil.AllowVendor)
 				<-sema
 
 				if err != nil {
@@ -107,22 +105,25 @@ func Build(ctxt *build.Context) (forward, reverse Graph, errors map[string]error
 				//     840ms: nonblocking cache with duplicate suppression
 				//     340ms: original code (no vendor check)
 				// TODO(adonovan): optimize, somehow.
-				memo := make(map[string]string)
-				absolutize := func(path string) string {
-					canon, ok := memo[path]
-					if !ok {
-						sema <- 1
-						bp2, _ := ctxt.Import(path, bp.Dir, build.FindOnly)
-						<-sema
+				absolutize := func(path string) string { return path }
+				if buildutil.AllowVendor != 0 {
+					memo := make(map[string]string)
+					absolutize = func(path string) string {
+						canon, ok := memo[path]
+						if !ok {
+							sema <- 1
+							bp2, _ := ctxt.Import(path, bp.Dir, build.FindOnly|buildutil.AllowVendor)
+							<-sema
 
-						if bp2 != nil {
-							canon = bp2.ImportPath
-						} else {
-							canon = path
+							if bp2 != nil {
+								canon = bp2.ImportPath
+							} else {
+								canon = path
+							}
+							memo[path] = canon
 						}
-						memo[path] = canon
+						return canon
 					}
-					return canon
 				}
 
 				if bp != nil {

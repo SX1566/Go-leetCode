@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // Package ssa/interp defines an interpreter for the SSA
 // representation of Go programs.
 //
@@ -20,17 +22,17 @@
 //
 // * The reflect package is only partially implemented.
 //
-// * The "testing" package is no longer supported because it
-// depends on low-level details that change too often.
-//
-// * "sync/atomic" operations are not atomic due to the "boxed" value
-// representation: it is not possible to read, modify and write an
-// interface value atomically. As a consequence, Mutexes are currently
-// broken.
+// * "sync/atomic" operations are not currently atomic due to the
+// "boxed" value representation: it is not possible to read, modify
+// and write an interface value atomically.  As a consequence, Mutexes
+// are currently broken.  TODO(adonovan): provide a metacircular
+// implementation of Mutex avoiding the broken atomic primitives.
 //
 // * recover is only partially implemented.  Also, the interpreter
 // makes no attempt to distinguish target panics from interpreter
 // crashes.
+//
+// * map iteration is asymptotically inefficient.
 //
 // * the sizes of the int, uint and uintptr types in the target
 // program are assumed to be the same as those of the interpreter
@@ -51,7 +53,6 @@ import (
 	"os"
 	"reflect"
 	"runtime"
-	"sync/atomic"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -76,16 +77,15 @@ type methodSet map[string]*ssa.Function
 
 // State shared between all interpreted goroutines.
 type interpreter struct {
-	osArgs             []value                // the value of os.Args
-	prog               *ssa.Program           // the SSA program
-	globals            map[*ssa.Global]*value // addresses of global variables (immutable)
-	mode               Mode                   // interpreter options
-	reflectPackage     *ssa.Package           // the fake reflect package
-	errorMethods       methodSet              // the method set of reflect.error, which implements the error interface.
-	rtypeMethods       methodSet              // the method set of rtype, which implements the reflect.Type interface.
-	runtimeErrorString types.Type             // the runtime.errorString type
-	sizes              types.Sizes            // the effective type-sizing function
-	goroutines         int32                  // atomically updated
+	osArgs             []value              // the value of os.Args
+	prog               *ssa.Program         // the SSA program
+	globals            map[ssa.Value]*value // addresses of global variables (immutable)
+	mode               Mode                 // interpreter options
+	reflectPackage     *ssa.Package         // the fake reflect package
+	errorMethods       methodSet            // the method set of reflect.error, which implements the error interface.
+	rtypeMethods       methodSet            // the method set of rtype, which implements the reflect.Type interface.
+	runtimeErrorString types.Type           // the runtime.errorString type
+	sizes              types.Sizes          // the effective type-sizing function
 }
 
 type deferred struct {
@@ -131,6 +131,7 @@ func (fr *frame) get(key ssa.Value) value {
 
 // runDefer runs a deferred call d.
 // It always returns normally, but may set or clear fr.panic.
+//
 func (fr *frame) runDefer(d *deferred) {
 	if fr.i.mode&EnableTracing != 0 {
 		fmt.Fprintf(os.Stderr, "%s: invoking deferred function call\n",
@@ -159,6 +160,7 @@ func (fr *frame) runDefer(d *deferred) {
 //
 // If there was no initial state of panic, or it was recovered from,
 // runDefers returns normally.
+//
 func (fr *frame) runDefers() {
 	for d := fr.defers; d != nil; d = d.tail {
 		fr.runDefer(d)
@@ -207,9 +209,6 @@ func visitInstr(fr *frame, instr ssa.Instruction) continuation {
 
 	case *ssa.Convert:
 		fr.env[instr] = conv(instr.Type(), instr.X.Type(), fr.get(instr.X))
-
-	case *ssa.SliceToArrayPointer:
-		fr.env[instr] = sliceToArrayPointer(instr.Type(), instr.X.Type(), fr.get(instr.X))
 
 	case *ssa.MakeInterface:
 		fr.env[instr] = iface{t: instr.X.Type(), v: fr.get(instr.X)}
@@ -270,14 +269,10 @@ func visitInstr(fr *frame, instr ssa.Instruction) continuation {
 
 	case *ssa.Go:
 		fn, args := prepareCall(fr, &instr.Call)
-		atomic.AddInt32(&fr.i.goroutines, 1)
-		go func() {
-			call(fr.i, nil, instr.Pos(), fn, args)
-			atomic.AddInt32(&fr.i.goroutines, -1)
-		}()
+		go call(fr.i, nil, instr.Pos(), fn, args)
 
 	case *ssa.MakeChan:
-		fr.env[instr] = make(chan value, asInt64(fr.get(instr.Size)))
+		fr.env[instr] = make(chan value, asInt(fr.get(instr.Size)))
 
 	case *ssa.Alloc:
 		var addr *value
@@ -292,20 +287,17 @@ func visitInstr(fr *frame, instr ssa.Instruction) continuation {
 		*addr = zero(deref(instr.Type()))
 
 	case *ssa.MakeSlice:
-		slice := make([]value, asInt64(fr.get(instr.Cap)))
+		slice := make([]value, asInt(fr.get(instr.Cap)))
 		tElt := instr.Type().Underlying().(*types.Slice).Elem()
 		for i := range slice {
 			slice[i] = zero(tElt)
 		}
-		fr.env[instr] = slice[:asInt64(fr.get(instr.Len))]
+		fr.env[instr] = slice[:asInt(fr.get(instr.Len))]
 
 	case *ssa.MakeMap:
-		var reserve int64
+		reserve := 0
 		if instr.Reserve != nil {
-			reserve = asInt64(fr.get(instr.Reserve))
-		}
-		if !fitsInt(reserve, fr.i.sizes) {
-			panic(fmt.Sprintf("ssa.MakeMap.Reserve value %d does not fit in int", reserve))
+			reserve = asInt(fr.get(instr.Reserve))
 		}
 		fr.env[instr] = makeMap(instr.Type().Underlying().(*types.Map).Key(), reserve)
 
@@ -316,7 +308,9 @@ func visitInstr(fr *frame, instr ssa.Instruction) continuation {
 		fr.env[instr] = fr.get(instr.Iter).(iter).next()
 
 	case *ssa.FieldAddr:
-		fr.env[instr] = &(*fr.get(instr.X).(*value)).(structure)[instr.Field]
+		x := fr.get(instr.X)
+		// FIXME wrong!  &global.f must not change if we do *global = zero!
+		fr.env[instr] = &(*x.(*value)).(structure)[instr.Field]
 
 	case *ssa.Field:
 		fr.env[instr] = fr.get(instr.X).(structure)[instr.Field]
@@ -326,25 +320,15 @@ func visitInstr(fr *frame, instr ssa.Instruction) continuation {
 		idx := fr.get(instr.Index)
 		switch x := x.(type) {
 		case []value:
-			fr.env[instr] = &x[asInt64(idx)]
+			fr.env[instr] = &x[asInt(idx)]
 		case *value: // *array
-			fr.env[instr] = &(*x).(array)[asInt64(idx)]
+			fr.env[instr] = &(*x).(array)[asInt(idx)]
 		default:
 			panic(fmt.Sprintf("unexpected x type in IndexAddr: %T", x))
 		}
 
 	case *ssa.Index:
-		x := fr.get(instr.X)
-		idx := fr.get(instr.Index)
-
-		switch x := x.(type) {
-		case array:
-			fr.env[instr] = x[asInt64(idx)]
-		case string:
-			fr.env[instr] = x[asInt64(idx)]
-		default:
-			panic(fmt.Sprintf("unexpected x type in Index: %T", x))
-		}
+		fr.env[instr] = fr.get(instr.X).(array)[asInt(fr.get(instr.Index))]
 
 	case *ssa.Lookup:
 		fr.env[instr] = lookup(instr, fr.get(instr.X), fr.get(instr.Index))
@@ -437,6 +421,7 @@ func visitInstr(fr *frame, instr ssa.Instruction) continuation {
 // prepareCall determines the function value and argument values for a
 // function call in a Call, Go or Defer instruction, performing
 // interface method lookup if needed.
+//
 func prepareCall(fr *frame, call *ssa.CallCommon) (fn value, args []value) {
 	v := fr.get(call.Value)
 	if call.Method == nil {
@@ -465,6 +450,7 @@ func prepareCall(fr *frame, call *ssa.CallCommon) (fn value, args []value) {
 // call interprets a call to a function (function, builtin or closure)
 // fn with arguments args, returning its result.
 // callpos is the position of the callsite.
+//
 func call(i *interpreter, caller *frame, callpos token.Pos, fn value, args []value) value {
 	switch fn := fn.(type) {
 	case *ssa.Function:
@@ -490,6 +476,7 @@ func loc(fset *token.FileSet, pos token.Pos) string {
 // callSSA interprets a call to function fn with arguments args,
 // and lexical environment env, returning its result.
 // callpos is the position of the callsite.
+//
 func callSSA(i *interpreter, caller *frame, callpos token.Pos, fn *ssa.Function, args []value, env []value) value {
 	if i.mode&EnableTracing != 0 {
 		fset := fn.Prog.Fset
@@ -518,12 +505,6 @@ func callSSA(i *interpreter, caller *frame, callpos token.Pos, fn *ssa.Function,
 			panic("no code for function: " + name)
 		}
 	}
-
-	// generic function body?
-	if fn.TypeParams().Len() > 0 && len(fn.TypeArgs()) == 0 {
-		panic("interp requires ssa.BuilderMode to include InstantiateGenerics to execute generics")
-	}
-
 	fr.env = make(map[ssa.Value]value)
 	fr.block = fn.Blocks[0]
 	fr.locals = make([]value, len(fn.Locals))
@@ -562,6 +543,7 @@ func callSSA(i *interpreter, caller *frame, callpos token.Pos, fn *ssa.Function,
 // After a recovered panic in a function with NRPs, fr.result is
 // undefined and fr.block contains the block at which to resume
 // control.
+//
 func runFrame(fr *frame) {
 	defer func() {
 		if fr.block == nil {
@@ -616,8 +598,6 @@ func doRecover(caller *frame) value {
 		caller.caller.panicking = false
 		p := caller.caller.panic
 		caller.caller.panic = nil
-
-		// TODO(adonovan): support runtime.Goexit.
 		switch p := p.(type) {
 		case targetPanic:
 			// The target program explicitly called panic().
@@ -644,6 +624,30 @@ func setGlobal(i *interpreter, pkg *ssa.Package, name string, v value) {
 	panic("no global variable: " + pkg.Pkg.Path() + "." + name)
 }
 
+var environ []value
+
+func init() {
+	for _, s := range os.Environ() {
+		environ = append(environ, s)
+	}
+	environ = append(environ, "GOSSAINTERP=1")
+	environ = append(environ, "GOARCH="+runtime.GOARCH)
+}
+
+// deleteBodies delete the bodies of all standalone functions except the
+// specified ones.  A missing intrinsic leads to a clear runtime error.
+func deleteBodies(pkg *ssa.Package, except ...string) {
+	keep := make(map[string]bool)
+	for _, e := range except {
+		keep[e] = true
+	}
+	for _, mem := range pkg.Members {
+		if fn, ok := mem.(*ssa.Function); ok && !keep[fn.Name()] {
+			fn.Blocks = nil
+		}
+	}
+}
+
 // Interpret interprets the Go program whose main package is mainpkg.
 // mode specifies various interpreter options.  filename and args are
 // the initial values of os.Args for the target program.  sizes is the
@@ -654,15 +658,12 @@ func setGlobal(i *interpreter, pkg *ssa.Package, name string, v value) {
 //
 // The SSA program must include the "runtime" package.
 //
-// Type parameterized functions must have been built with
-// InstantiateGenerics in the ssa.BuilderMode to be interpreted.
 func Interpret(mainpkg *ssa.Package, mode Mode, sizes types.Sizes, filename string, args []string) (exitCode int) {
 	i := &interpreter{
-		prog:       mainpkg.Prog,
-		globals:    make(map[*ssa.Global]*value),
-		mode:       mode,
-		sizes:      sizes,
-		goroutines: 1,
+		prog:    mainpkg.Prog,
+		globals: make(map[ssa.Value]*value),
+		mode:    mode,
+		sizes:   sizes,
 	}
 	runtimePkg := i.prog.ImportedPackage("runtime")
 	if runtimePkg == nil {
@@ -685,6 +686,20 @@ func Interpret(mainpkg *ssa.Package, mode Mode, sizes types.Sizes, filename stri
 				cell := zero(deref(v.Type()))
 				i.globals[v] = &cell
 			}
+		}
+
+		// Ad-hoc initialization for magic system variables.
+		switch pkg.Pkg.Path() {
+		case "syscall":
+			setGlobal(i, pkg, "envs", environ)
+
+		case "reflect":
+			deleteBodies(pkg, "DeepEqual", "deepValueEqual")
+
+		case "runtime":
+			sz := sizes.Sizeof(pkg.Pkg.Scope().Lookup("MemStats").Type())
+			setGlobal(i, pkg, "sizeof_C_MStats", uintptr(sz))
+			deleteBodies(pkg, "GOROOT", "gogetenv")
 		}
 	}
 

@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 // This is a slice of the fmt package.
@@ -40,4 +39,4 @@ func main() {
 	Println("Hello, World!", S(0))
 }
 
-// @calls (*command-line-arguments.pp).doPrint -> (command-line-arguments.S).String
+// @calls (*main.pp).doPrint -> (main.S).String

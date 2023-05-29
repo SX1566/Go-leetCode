@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package ssa_test
 
 // This file defines tests of source-level debugging utilities.
@@ -9,18 +11,17 @@ package ssa_test
 import (
 	"fmt"
 	"go/ast"
-	"go/constant"
+	exact "go/constant"
 	"go/parser"
 	"go/token"
 	"go/types"
-	"io/ioutil"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/ast/astutil"
-	"golang.org/x/tools/go/expect"
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
@@ -32,14 +33,10 @@ func TestObjValueLookup(t *testing.T) {
 	}
 
 	conf := loader.Config{ParserMode: parser.ParseComments}
-	src, err := ioutil.ReadFile("testdata/objlookup.go")
+	f, err := conf.ParseFile("testdata/objlookup.go", nil)
 	if err != nil {
-		t.Fatal(err)
-	}
-	readFile := func(filename string) ([]byte, error) { return src, nil }
-	f, err := conf.ParseFile("testdata/objlookup.go", src)
-	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return
 	}
 	conf.CreateFromFiles("main", f)
 
@@ -47,40 +44,16 @@ func TestObjValueLookup(t *testing.T) {
 	// kind of ssa.Value we expect (represented "Constant", "&Alloc").
 	expectations := make(map[string]string)
 
-	// Each note of the form @ssa(x, "BinOp") in testdata/objlookup.go
-	// specifies an expectation that an object named x declared on the
-	// same line is associated with an an ssa.Value of type *ssa.BinOp.
-	notes, err := expect.ExtractGo(conf.Fset, f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, n := range notes {
-		if n.Name != "ssa" {
-			t.Errorf("%v: unexpected note type %q, want \"ssa\"", conf.Fset.Position(n.Pos), n.Name)
-			continue
+	// Find all annotations of form x::BinOp, &y::Alloc, etc.
+	re := regexp.MustCompile(`(\b|&)?(\w*)::(\w*)\b`)
+	for _, c := range f.Comments {
+		text := c.Text()
+		pos := conf.Fset.Position(c.Pos())
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			key := fmt.Sprintf("%s:%d", m[2], pos.Line)
+			value := m[1] + m[3]
+			expectations[key] = value
 		}
-		if len(n.Args) != 2 {
-			t.Errorf("%v: ssa has %d args, want 2", conf.Fset.Position(n.Pos), len(n.Args))
-			continue
-		}
-		ident, ok := n.Args[0].(expect.Identifier)
-		if !ok {
-			t.Errorf("%v: got %v for arg 1, want identifier", conf.Fset.Position(n.Pos), n.Args[0])
-			continue
-		}
-		exp, ok := n.Args[1].(string)
-		if !ok {
-			t.Errorf("%v: got %v for arg 2, want string", conf.Fset.Position(n.Pos), n.Args[1])
-			continue
-		}
-		p, _, err := expect.MatchBefore(conf.Fset, readFile, n.Pos, string(ident))
-		if err != nil {
-			t.Error(err)
-			continue
-		}
-		pos := conf.Fset.Position(p)
-		key := fmt.Sprintf("%s:%d", ident, pos.Line)
-		expectations[key] = exp
 	}
 
 	iprog, err := conf.Load()
@@ -89,7 +62,7 @@ func TestObjValueLookup(t *testing.T) {
 		return
 	}
 
-	prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0) /*|ssa.PrintFunctions*/)
+	prog := ssautil.CreateProgram(iprog, 0 /*|ssa.PrintFunctions*/)
 	mainInfo := iprog.Created[0]
 	mainPkg := prog.Package(mainInfo.Pkg)
 	mainPkg.SetDebugMode(true)
@@ -173,7 +146,7 @@ func checkConstValue(t *testing.T, prog *ssa.Program, obj *types.Const) {
 		return
 	}
 	if obj.Name() != "nil" {
-		if !constant.Compare(c.Value, token.EQL, obj.Val()) {
+		if !exact.Compare(c.Value, token.EQL, obj.Val()) {
 			t.Errorf("ConstValue(%s).Value (%s) != %s",
 				obj, c.Value, obj.Val())
 			return
@@ -223,16 +196,12 @@ func checkVarValue(t *testing.T, prog *ssa.Program, pkg *ssa.Package, ref []ast.
 // Ensure that, in debug mode, we can determine the ssa.Value
 // corresponding to every ast.Expr.
 func TestValueForExpr(t *testing.T) {
-	testValueForExpr(t, "testdata/valueforexpr.go")
-}
-
-func testValueForExpr(t *testing.T, testfile string) {
 	if runtime.GOOS == "android" {
 		t.Skipf("no testdata dir on %s", runtime.GOOS)
 	}
 
 	conf := loader.Config{ParserMode: parser.ParseComments}
-	f, err := conf.ParseFile(testfile, nil)
+	f, err := conf.ParseFile("testdata/valueforexpr.go", nil)
 	if err != nil {
 		t.Error(err)
 		return
@@ -247,7 +216,7 @@ func testValueForExpr(t *testing.T, testfile string) {
 
 	mainInfo := iprog.Created[0]
 
-	prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0))
+	prog := ssautil.CreateProgram(iprog, 0)
 	mainPkg := prog.Package(mainInfo.Pkg)
 	mainPkg.SetDebugMode(true)
 	mainPkg.Build()
@@ -261,41 +230,37 @@ func testValueForExpr(t *testing.T, testfile string) {
 		}
 	}
 
-	var parenExprs []*ast.ParenExpr
+	// Find the actual AST node for each canonical position.
+	parenExprByPos := make(map[token.Pos]*ast.ParenExpr)
 	ast.Inspect(f, func(n ast.Node) bool {
 		if n != nil {
 			if e, ok := n.(*ast.ParenExpr); ok {
-				parenExprs = append(parenExprs, e)
+				parenExprByPos[e.Pos()] = e
 			}
 		}
 		return true
 	})
 
-	notes, err := expect.ExtractGo(prog.Fset, f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, n := range notes {
-		want := n.Name
-		if want == "nil" {
-			want = "<nil>"
-		}
-		position := prog.Fset.Position(n.Pos)
-		var e ast.Expr
-		for _, paren := range parenExprs {
-			if paren.Pos() > n.Pos {
-				e = paren.X
-				break
-			}
-		}
-		if e == nil {
-			t.Errorf("%s: note doesn't precede ParenExpr: %q", position, want)
+	// Find all annotations of form /*@kind*/.
+	for _, c := range f.Comments {
+		text := strings.TrimSpace(c.Text())
+		if text == "" || text[0] != '@' {
 			continue
 		}
+		text = text[1:]
+		pos := c.End() + 1
+		position := prog.Fset.Position(pos)
+		var e ast.Expr
+		if target := parenExprByPos[pos]; target == nil {
+			t.Errorf("%s: annotation doesn't precede ParenExpr: %q", position, text)
+			continue
+		} else {
+			e = target.X
+		}
 
-		path, _ := astutil.PathEnclosingInterval(f, n.Pos, n.Pos)
+		path, _ := astutil.PathEnclosingInterval(f, pos, pos)
 		if path == nil {
-			t.Errorf("%s: can't find AST path from root to comment: %s", position, want)
+			t.Errorf("%s: can't find AST path from root to comment: %s", position, text)
 			continue
 		}
 
@@ -307,7 +272,7 @@ func testValueForExpr(t *testing.T, testfile string) {
 
 		v, gotAddr := fn.ValueForExpr(e) // (may be nil)
 		got := strings.TrimPrefix(fmt.Sprintf("%T", v), "*ssa.")
-		if got != want {
+		if want := text; got != want {
 			t.Errorf("%s: got value %q, want %q", position, got, want)
 		}
 		if v != nil {
@@ -325,6 +290,7 @@ func testValueForExpr(t *testing.T, testfile string) {
 // findInterval parses input and returns the [start, end) positions of
 // the first occurrence of substr in input.  f==nil indicates failure;
 // an error has already been reported in that case.
+//
 func findInterval(t *testing.T, fset *token.FileSet, input, substr string) (f *ast.File, start, end token.Pos) {
 	f, err := parser.ParseFile(fset, "<input>", input, 0)
 	if err != nil {
@@ -403,7 +369,7 @@ func TestEnclosingFunction(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0))
+		prog := ssautil.CreateProgram(iprog, 0)
 		pkg := prog.Package(iprog.Created[0].Pkg)
 		pkg.Build()
 

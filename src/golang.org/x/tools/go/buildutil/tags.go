@@ -1,7 +1,3 @@
-// Copyright 2015 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package buildutil
 
 // This logic was copied from stringsFlag from $GOROOT/src/cmd/go/build.go.
@@ -12,7 +8,7 @@ const TagsFlagDoc = "a list of `build tags` to consider satisfied during the bui
 	"For more information about build tags, see the description of " +
 	"build constraints in the documentation for the go/build package"
 
-// TagsFlag is an implementation of the flag.Value and flag.Getter interfaces that parses
+// TagsFlag is an implementation of the flag.Value interface that parses
 // a flag value in the same manner as go build's -tags flag and
 // populates a []string slice.
 //
@@ -20,8 +16,7 @@ const TagsFlagDoc = "a list of `build tags` to consider satisfied during the bui
 // See $GOROOT/src/cmd/go/doc.go for description of 'go build -tags' flag.
 //
 // Example:
-//
-//	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
+// 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
 type TagsFlag []string
 
 func (v *TagsFlag) Set(s string) error {
@@ -32,8 +27,6 @@ func (v *TagsFlag) Set(s string) error {
 	}
 	return err
 }
-
-func (v *TagsFlag) Get() interface{} { return *v }
 
 func splitQuotedFields(s string) ([]string, error) {
 	// Split fields allowing '' or "" around elements.

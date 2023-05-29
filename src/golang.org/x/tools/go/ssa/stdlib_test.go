@@ -4,7 +4,6 @@
 
 // Incomplete source tree on Android.
 
-//go:build !android
 // +build !android
 
 package ssa_test
@@ -16,16 +15,29 @@ package ssa_test
 
 import (
 	"go/ast"
+	"go/build"
 	"go/token"
 	"runtime"
 	"testing"
 	"time"
 
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/buildutil"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
-	"golang.org/x/tools/internal/testenv"
 )
+
+// Skip the set of packages that transitively depend on
+// cmd/internal/objfile, which uses vendoring,
+// which go/loader does not yet support.
+// TODO(adonovan): add support for vendoring and delete this.
+var skip = map[string]bool{
+	"cmd/addr2line":        true,
+	"cmd/internal/objfile": true,
+	"cmd/nm":               true,
+	"cmd/objdump":          true,
+	"cmd/pprof":            true,
+}
 
 func bytesAllocated() uint64 {
 	runtime.GC()
@@ -35,19 +47,24 @@ func bytesAllocated() uint64 {
 }
 
 func TestStdlib(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode; too slow (https://golang.org/issue/14113)")
-	}
-	testenv.NeedsTool(t, "go")
-
 	// Load, parse and type-check the program.
 	t0 := time.Now()
 	alloc0 := bytesAllocated()
 
-	cfg := &packages.Config{Mode: packages.LoadSyntax}
-	pkgs, err := packages.Load(cfg, "std", "cmd")
+	// Load, parse and type-check the program.
+	ctxt := build.Default // copy
+	ctxt.GOPATH = ""      // disable GOPATH
+	conf := loader.Config{Build: &ctxt}
+	for _, path := range buildutil.AllPackages(conf.Build) {
+		if skip[path] {
+			continue
+		}
+		conf.ImportWithTests(path)
+	}
+
+	iprog, err := conf.Load()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Load failed: %v", err)
 	}
 
 	t1 := time.Now()
@@ -58,8 +75,7 @@ func TestStdlib(t *testing.T) {
 	// Comment out these lines during benchmarking.  Approx SSA build costs are noted.
 	mode |= ssa.SanityCheckFunctions // + 2% space, + 4% time
 	mode |= ssa.GlobalDebug          // +30% space, +18% time
-	mode |= ssa.InstantiateGenerics  // + 0% space, + 2% time (unlikely to reproduce outside of stdlib)
-	prog, _ := ssautil.Packages(pkgs, mode)
+	prog := ssautil.CreateProgram(iprog, mode)
 
 	t2 := time.Now()
 
@@ -74,9 +90,9 @@ func TestStdlib(t *testing.T) {
 		t.Errorf("Loaded only %d packages, want at least %d", numPkgs, want)
 	}
 
-	// Keep pkgs reachable until after we've measured memory usage.
-	if len(pkgs) == 0 {
-		panic("unreachable")
+	// Keep iprog reachable until after we've measured memory usage.
+	if len(iprog.AllPackages) == 0 {
+		print() // unreachable
 	}
 
 	allFuncs := ssautil.AllFunctions(prog)

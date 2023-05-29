@@ -3,6 +3,7 @@
 // license that can be found in the LICENSE file.
 
 /*
+
 Package callgraph defines the call graph and various algorithms
 and utilities to operate on it.
 
@@ -29,6 +30,7 @@ calling main() and init().
 Calls to built-in functions (e.g. panic, println) are not represented
 in the call graph; they are treated like built-in operators of the
 language.
+
 */
 package callgraph // import "golang.org/x/tools/go/callgraph"
 
@@ -36,8 +38,6 @@ package callgraph // import "golang.org/x/tools/go/callgraph"
 // callgraph, preserving topology.
 // More generally, we could eliminate "uninteresting" nodes such as
 // nodes from packages we don't care about.
-
-// TODO(zpavlinovic): decide how callgraphs handle calls to and from generic function bodies.
 
 import (
 	"fmt"
@@ -51,6 +51,7 @@ import (
 // A graph may contain nodes that are not reachable from the root.
 // If the call graph is sound, such nodes indicate unreachable
 // functions.
+//
 type Graph struct {
 	Root  *Node                   // the distinguished root node
 	Nodes map[*ssa.Function]*Node // all nodes by function
@@ -88,7 +89,7 @@ func (n *Node) String() string {
 // A Edge represents an edge in the call graph.
 //
 // Site is nil for edges originating in synthetic or intrinsic
-// functions, e.g. reflect.Value.Call or the root of the call graph.
+// functions, e.g. reflect.Call or the root of the call graph.
 type Edge struct {
 	Caller *Node
 	Site   ssa.CallInstruction

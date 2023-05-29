@@ -2,28 +2,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !plan9
-// +build !plan9
-
-// The stress utility is intended for catching sporadic failures.
+// The stress utility is intended for catching of episodic failures.
 // It runs a given process in parallel in a loop and collects any failures.
 // Usage:
-//
-//	$ stress ./fmt.test -test.run=TestSometing -test.cpu=10
-//
+// 	$ stress ./fmt.test -test.run=TestSometing -test.cpu=10
 // You can also specify a number of parallel processes with -p flag;
 // instruct the utility to not kill hanged processes for gdb attach;
 // or specify the failure output you are looking for (if you want to
-// ignore some other sporadic failures).
+// ignore some other episodic failures).
 package main
 
 import (
 	"flag"
 	"fmt"
-	exec "golang.org/x/sys/execabs"
 	"io/ioutil"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"syscall"
@@ -36,26 +30,7 @@ var (
 	flagKill    = flag.Bool("kill", true, "kill timed out processes if true, otherwise just print pid (to attach with gdb)")
 	flagFailure = flag.String("failure", "", "fail only if output matches `regexp`")
 	flagIgnore  = flag.String("ignore", "", "ignore failure if output matches `regexp`")
-	flagOutput  = flag.String("o", defaultPrefix(), "output failure logs to `path` plus a unique suffix")
 )
-
-func init() {
-	flag.Usage = func() {
-		os.Stderr.WriteString(`The stress utility is intended for catching sporadic failures.
-It runs a given process in parallel in a loop and collects any failures.
-Usage:
-
-	$ stress ./fmt.test -test.run=TestSometing -test.cpu=10
-
-`)
-		flag.PrintDefaults()
-	}
-}
-
-func defaultPrefix() string {
-	date := time.Now().Format("go-stress-20060102T150405-")
-	return filepath.Join(os.TempDir(), date)
-}
 
 func main() {
 	flag.Parse()
@@ -116,7 +91,6 @@ func main() {
 		}()
 	}
 	runs, fails := 0, 0
-	start := time.Now()
 	ticker := time.NewTicker(5 * time.Second).C
 	for {
 		select {
@@ -126,8 +100,7 @@ func main() {
 				continue
 			}
 			fails++
-			dir, path := filepath.Split(*flagOutput)
-			f, err := ioutil.TempFile(dir, path)
+			f, err := ioutil.TempFile("", "go-stress")
 			if err != nil {
 				fmt.Printf("failed to create temp file: %v\n", err)
 				os.Exit(1)
@@ -135,18 +108,11 @@ func main() {
 			f.Write(out)
 			f.Close()
 			if len(out) > 2<<10 {
-				out := out[:2<<10]
-				fmt.Printf("\n%s\n%s\n…\n", f.Name(), out)
-			} else {
-				fmt.Printf("\n%s\n%s\n", f.Name(), out)
+				out = out[:2<<10]
 			}
+			fmt.Printf("\n%s\n%s\n", f.Name(), out)
 		case <-ticker:
-			elapsed := time.Since(start).Truncate(time.Second)
-			var pct string
-			if fails > 0 {
-				pct = fmt.Sprintf(" (%0.2f%%)", 100.0*float64(fails)/float64(runs))
-			}
-			fmt.Printf("%v: %v runs so far, %v failures%s\n", elapsed, runs, fails, pct)
+			fmt.Printf("%v runs so far, %v failures\n", runs, fails)
 		}
 	}
 }

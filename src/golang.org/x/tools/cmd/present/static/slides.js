@@ -14,137 +14,137 @@ var curSlide;
 /* classList polyfill by Eli Grey
  * (http://purl.eligrey.com/github/classList.js/blob/master/classList.js) */
 
-if (
-  typeof document !== 'undefined' &&
-  !('classList' in document.createElement('a'))
-) {
-  (function(view) {
-    var classListProp = 'classList',
-      protoProp = 'prototype',
-      elemCtrProto = (view.HTMLElement || view.Element)[protoProp],
-      objCtr = Object;
-    (strTrim =
-      String[protoProp].trim ||
-      function() {
-        return this.replace(/^\s+|\s+$/g, '');
-      }),
-      (arrIndexOf =
-        Array[protoProp].indexOf ||
-        function(item) {
-          for (var i = 0, len = this.length; i < len; i++) {
-            if (i in this && this[i] === item) {
-              return i;
-            }
-          }
-          return -1;
-        }),
-      // Vendors: please allow content code to instantiate DOMExceptions
-      (DOMEx = function(type, message) {
-        this.name = type;
-        this.code = DOMException[type];
-        this.message = message;
-      }),
-      (checkTokenAndGetIndex = function(classList, token) {
-        if (token === '') {
-          throw new DOMEx(
-            'SYNTAX_ERR',
-            'An invalid or illegal string was specified'
-          );
-        }
-        if (/\s/.test(token)) {
-          throw new DOMEx(
-            'INVALID_CHARACTER_ERR',
-            'String contains an invalid character'
-          );
-        }
-        return arrIndexOf.call(classList, token);
-      }),
-      (ClassList = function(elem) {
-        var trimmedClasses = strTrim.call(elem.className),
-          classes = trimmedClasses ? trimmedClasses.split(/\s+/) : [];
-        for (var i = 0, len = classes.length; i < len; i++) {
-          this.push(classes[i]);
-        }
-        this._updateClassName = function() {
-          elem.className = this.toString();
-        };
-      }),
-      (classListProto = ClassList[protoProp] = []),
-      (classListGetter = function() {
-        return new ClassList(this);
-      });
-    // Most DOMException implementations don't allow calling DOMException's toString()
-    // on non-DOMExceptions. Error's toString() is sufficient here.
-    DOMEx[protoProp] = Error[protoProp];
-    classListProto.item = function(i) {
-      return this[i] || null;
-    };
-    classListProto.contains = function(token) {
-      token += '';
-      return checkTokenAndGetIndex(this, token) !== -1;
-    };
-    classListProto.add = function(token) {
-      token += '';
-      if (checkTokenAndGetIndex(this, token) === -1) {
-        this.push(token);
-        this._updateClassName();
-      }
-    };
-    classListProto.remove = function(token) {
-      token += '';
-      var index = checkTokenAndGetIndex(this, token);
-      if (index !== -1) {
-        this.splice(index, 1);
-        this._updateClassName();
-      }
-    };
-    classListProto.toggle = function(token) {
-      token += '';
-      if (checkTokenAndGetIndex(this, token) === -1) {
-        this.add(token);
-      } else {
-        this.remove(token);
-      }
-    };
-    classListProto.toString = function() {
-      return this.join(' ');
-    };
+if (typeof document !== "undefined" && !("classList" in document.createElement("a"))) {
 
-    if (objCtr.defineProperty) {
-      var classListPropDesc = {
-        get: classListGetter,
-        enumerable: true,
-        configurable: true,
-      };
-      try {
-        objCtr.defineProperty(elemCtrProto, classListProp, classListPropDesc);
-      } catch (ex) {
-        // IE 8 doesn't support enumerable:true
-        if (ex.number === -0x7ff5ec54) {
-          classListPropDesc.enumerable = false;
-          objCtr.defineProperty(elemCtrProto, classListProp, classListPropDesc);
-        }
+(function (view) {
+
+var
+    classListProp = "classList"
+  , protoProp = "prototype"
+  , elemCtrProto = (view.HTMLElement || view.Element)[protoProp]
+  , objCtr = Object
+    strTrim = String[protoProp].trim || function () {
+    return this.replace(/^\s+|\s+$/g, "");
+  }
+  , arrIndexOf = Array[protoProp].indexOf || function (item) {
+    for (var i = 0, len = this.length; i < len; i++) {
+      if (i in this && this[i] === item) {
+        return i;
       }
-    } else if (objCtr[protoProp].__defineGetter__) {
-      elemCtrProto.__defineGetter__(classListProp, classListGetter);
     }
-  })(self);
+    return -1;
+  }
+  // Vendors: please allow content code to instantiate DOMExceptions
+  , DOMEx = function (type, message) {
+    this.name = type;
+    this.code = DOMException[type];
+    this.message = message;
+  }
+  , checkTokenAndGetIndex = function (classList, token) {
+    if (token === "") {
+      throw new DOMEx(
+          "SYNTAX_ERR"
+        , "An invalid or illegal string was specified"
+      );
+    }
+    if (/\s/.test(token)) {
+      throw new DOMEx(
+          "INVALID_CHARACTER_ERR"
+        , "String contains an invalid character"
+      );
+    }
+    return arrIndexOf.call(classList, token);
+  }
+  , ClassList = function (elem) {
+    var
+        trimmedClasses = strTrim.call(elem.className)
+      , classes = trimmedClasses ? trimmedClasses.split(/\s+/) : []
+    ;
+    for (var i = 0, len = classes.length; i < len; i++) {
+      this.push(classes[i]);
+    }
+    this._updateClassName = function () {
+      elem.className = this.toString();
+    };
+  }
+  , classListProto = ClassList[protoProp] = []
+  , classListGetter = function () {
+    return new ClassList(this);
+  }
+;
+// Most DOMException implementations don't allow calling DOMException's toString()
+// on non-DOMExceptions. Error's toString() is sufficient here.
+DOMEx[protoProp] = Error[protoProp];
+classListProto.item = function (i) {
+  return this[i] || null;
+};
+classListProto.contains = function (token) {
+  token += "";
+  return checkTokenAndGetIndex(this, token) !== -1;
+};
+classListProto.add = function (token) {
+  token += "";
+  if (checkTokenAndGetIndex(this, token) === -1) {
+    this.push(token);
+    this._updateClassName();
+  }
+};
+classListProto.remove = function (token) {
+  token += "";
+  var index = checkTokenAndGetIndex(this, token);
+  if (index !== -1) {
+    this.splice(index, 1);
+    this._updateClassName();
+  }
+};
+classListProto.toggle = function (token) {
+  token += "";
+  if (checkTokenAndGetIndex(this, token) === -1) {
+    this.add(token);
+  } else {
+    this.remove(token);
+  }
+};
+classListProto.toString = function () {
+  return this.join(" ");
+};
+
+if (objCtr.defineProperty) {
+  var classListPropDesc = {
+      get: classListGetter
+    , enumerable: true
+    , configurable: true
+  };
+  try {
+    objCtr.defineProperty(elemCtrProto, classListProp, classListPropDesc);
+  } catch (ex) { // IE 8 doesn't support enumerable:true
+    if (ex.number === -0x7FF5EC54) {
+      classListPropDesc.enumerable = false;
+      objCtr.defineProperty(elemCtrProto, classListProp, classListPropDesc);
+    }
+  }
+} else if (objCtr[protoProp].__defineGetter__) {
+  elemCtrProto.__defineGetter__(classListProp, classListGetter);
+}
+
+}(self));
+
 }
 /* ---------------------------------------------------------------------- */
 
 /* Slide movement */
 
 function hideHelpText() {
-  document.getElementById('help').style.display = 'none';
-}
+  $('#help').hide();
+};
 
 function getSlideEl(no) {
-  if (no < 0 || no >= slideEls.length) {
+  if ((no < 0) || (no >= slideEls.length)) {
     return null;
   } else {
     return slideEls[no];
   }
-}
+};
 
 function updateSlideClass(slideNo, className) {
   var el = getSlideEl(slideNo);
@@ -162,7 +162,7 @@ function updateSlideClass(slideNo, className) {
       el.classList.remove(SLIDE_CLASSES[i]);
     }
   }
-}
+};
 
 function updateSlides() {
   if (window.trackPageview) window.trackPageview();
@@ -202,7 +202,7 @@ function updateSlides() {
   enableSlideFrames(curSlide + 2);
 
   updateHash();
-}
+};
 
 function prevSlide() {
   hideHelpText();
@@ -211,9 +211,7 @@ function prevSlide() {
 
     updateSlides();
   }
-
-  if (notesEnabled) localStorage.setItem(destSlideKey(), curSlide);
-}
+};
 
 function nextSlide() {
   hideHelpText();
@@ -222,9 +220,7 @@ function nextSlide() {
 
     updateSlides();
   }
-
-  if (notesEnabled) localStorage.setItem(destSlideKey(), curSlide);
-}
+};
 
 /* Slide events */
 
@@ -244,7 +240,7 @@ function triggerEnterEvent(no) {
   evt.slideNumber = no + 1; // Make it readable
 
   el.dispatchEvent(evt);
-}
+};
 
 function triggerLeaveEvent(no) {
   var el = getSlideEl(no);
@@ -262,7 +258,7 @@ function triggerLeaveEvent(no) {
   evt.slideNumber = no + 1; // Make it readable
 
   el.dispatchEvent(evt);
-}
+};
 
 /* Touch events */
 
@@ -277,7 +273,7 @@ function handleTouchStart(event) {
     document.body.addEventListener('touchmove', handleTouchMove, true);
     document.body.addEventListener('touchend', handleTouchEnd, true);
   }
-}
+};
 
 function handleTouchMove(event) {
   if (event.touches.length > 1) {
@@ -287,13 +283,13 @@ function handleTouchMove(event) {
     touchDY = event.touches[0].pageY - touchStartY;
     event.preventDefault();
   }
-}
+};
 
 function handleTouchEnd(event) {
   var dx = Math.abs(touchDX);
   var dy = Math.abs(touchDY);
 
-  if (dx > PM_TOUCH_SENSITIVITY && dy < (dx * 2) / 3) {
+  if ((dx > PM_TOUCH_SENSITIVITY) && (dy < (dx * 2 / 3))) {
     if (touchDX > 0) {
       prevSlide();
     } else {
@@ -302,12 +298,12 @@ function handleTouchEnd(event) {
   }
 
   cancelTouch();
-}
+};
 
 function cancelTouch() {
   document.body.removeEventListener('touchmove', handleTouchMove, true);
   document.body.removeEventListener('touchend', handleTouchEnd, true);
-}
+};
 
 /* Preloading frames */
 
@@ -318,10 +314,10 @@ function disableSlideFrames(no) {
   }
 
   var frames = el.getElementsByTagName('iframe');
-  for (var i = 0, frame; (frame = frames[i]); i++) {
+  for (var i = 0, frame; frame = frames[i]; i++) {
     disableFrame(frame);
   }
-}
+};
 
 function enableSlideFrames(no) {
   var el = getSlideEl(no);
@@ -330,14 +326,14 @@ function enableSlideFrames(no) {
   }
 
   var frames = el.getElementsByTagName('iframe');
-  for (var i = 0, frame; (frame = frames[i]); i++) {
+  for (var i = 0, frame; frame = frames[i]; i++) {
     enableFrame(frame);
   }
-}
+};
 
 function disableFrame(frame) {
   frame.src = 'about:blank';
-}
+};
 
 function enableFrame(frame) {
   var src = frame._src;
@@ -345,11 +341,11 @@ function enableFrame(frame) {
   if (frame.src != src && src != 'about:blank') {
     frame.src = src;
   }
-}
+};
 
 function setupFrames() {
   var frames = document.querySelectorAll('iframe');
-  for (var i = 0, frame; (frame = frames[i]); i++) {
+  for (var i = 0, frame; frame = frames[i]; i++) {
     frame._src = frame.src;
     disableFrame(frame);
   }
@@ -357,7 +353,7 @@ function setupFrames() {
   enableSlideFrames(curSlide);
   enableSlideFrames(curSlide + 1);
   enableSlideFrames(curSlide + 2);
-}
+};
 
 function setupInteraction() {
   /* Clicking and tapping */
@@ -389,22 +385,19 @@ function getCurSlideFromHash() {
   } else {
     curSlide = 0;
   }
-}
+};
 
 function updateHash() {
   location.replace('#' + (curSlide + 1));
-}
+};
 
 /* Event listeners */
 
 function handleBodyKeyDown(event) {
   // If we're in a code element, only handle pgup/down.
-  var inCode = event.target.classList.contains('code');
+  var inCode = event.target.classList.contains("code");
 
   switch (event.keyCode) {
-    case 78: // 'N' opens presenter notes window
-      if (!inCode && notesEnabled) toggleNotesWindow();
-      break;
     case 72: // 'H' hides the help text
     case 27: // escape key
       if (!inCode) hideHelpText();
@@ -439,50 +432,11 @@ function handleBodyKeyDown(event) {
       event.preventDefault();
       break;
   }
-}
-
-function scaleSmallViewports() {
-  var el = document.querySelector('section.slides');
-  var transform = '';
-  var sWidthPx = 1250;
-  var sHeightPx = 750;
-  var sAspectRatio = sWidthPx / sHeightPx;
-  var wAspectRatio = window.innerWidth / window.innerHeight;
-
-  if (wAspectRatio <= sAspectRatio && window.innerWidth < sWidthPx) {
-    transform = 'scale(' + window.innerWidth / sWidthPx + ')';
-  } else if (window.innerHeight < sHeightPx) {
-    transform = 'scale(' + window.innerHeight / sHeightPx + ')';
-  }
-  el.style.transform = transform;
-}
+};
 
 function addEventListeners() {
   document.addEventListener('keydown', handleBodyKeyDown, false);
-  var resizeTimeout;
-  window.addEventListener('resize', function() {
-    // throttle resize events
-    window.clearTimeout(resizeTimeout);
-    resizeTimeout = window.setTimeout(function() {
-      resizeTimeout = null;
-      scaleSmallViewports();
-    }, 50);
-  });
-
-  // Force reset transform property of section.slides when printing page.
-  // Use both onbeforeprint and matchMedia for compatibility with different browsers.
-  var beforePrint = function() {
-    var el = document.querySelector('section.slides');
-    el.style.transform = '';
-  };
-  window.onbeforeprint = beforePrint;
-  if (window.matchMedia) {
-    var mediaQueryList = window.matchMedia('print');
-    mediaQueryList.addListener(function(mql) {
-      if (mql.matches) beforePrint();
-    });
-  }
-}
+};
 
 /* Initialization */
 
@@ -490,12 +444,11 @@ function addFontStyle() {
   var el = document.createElement('link');
   el.rel = 'stylesheet';
   el.type = 'text/css';
-  el.href =
-    '//fonts.googleapis.com/css?family=' +
-    'Open+Sans:regular,semibold,italic,italicsemibold|Droid+Sans+Mono';
+  el.href = '//fonts.googleapis.com/css?family=' +
+            'Open+Sans:regular,semibold,italic,italicsemibold|Droid+Sans+Mono';
 
   document.body.appendChild(el);
-}
+};
 
 function addGeneralStyle() {
   var el = document.createElement('link');
@@ -506,16 +459,17 @@ function addGeneralStyle() {
 
   var el = document.createElement('meta');
   el.name = 'viewport';
-  el.content = 'width=device-width,height=device-height,initial-scale=1';
+  el.content = 'width=1100,height=750';
   document.querySelector('head').appendChild(el);
 
   var el = document.createElement('meta');
   el.name = 'apple-mobile-web-app-capable';
   el.content = 'yes';
   document.querySelector('head').appendChild(el);
+};
 
-  scaleSmallViewports();
-}
+function showHelpText() {
+};
 
 function handleDomLoaded() {
   slideEls = document.querySelectorAll('section.slides > article');
@@ -530,18 +484,12 @@ function handleDomLoaded() {
 
   setupInteraction();
 
-  if (
-    window.location.hostname == 'localhost' ||
-    window.location.hostname == '127.0.0.1' ||
-    window.location.hostname == '::1'
-  ) {
+  if (window.location.hostname == "localhost" || window.location.hostname == "127.0.0.1" || window.location.hostname == "::1") {
     hideHelpText();
   }
 
   document.body.classList.add('loaded');
-
-  setupNotesSync();
-}
+};
 
 function initialize() {
   getCurSlideFromHash();
@@ -559,14 +507,10 @@ function initialize() {
 
 // If ?debug exists then load the script relative instead of absolute
 if (!window['_DEBUG'] && document.location.href.indexOf('?debug') !== -1) {
-  document.addEventListener(
-    'DOMContentLoaded',
-    function() {
-      // Avoid missing the DomContentLoaded event
-      window['_DCL'] = true;
-    },
-    false
-  );
+  document.addEventListener('DOMContentLoaded', function() {
+    // Avoid missing the DomContentLoaded event
+    window['_DCL'] = true
+  }, false);
 
   window['_DEBUG'] = true;
   var script = document.createElement('script');
@@ -579,57 +523,4 @@ if (!window['_DEBUG'] && document.location.href.indexOf('?debug') !== -1) {
   s.parentNode.removeChild(s);
 } else {
   initialize();
-}
-
-/* Synchronize windows when notes are enabled */
-
-function setupNotesSync() {
-  if (!notesEnabled) return;
-
-  function setupPlayResizeSync() {
-    var out = document.getElementsByClassName('output');
-    for (var i = 0; i < out.length; i++) {
-      $(out[i]).bind('resize', function(event) {
-        if ($(event.target).hasClass('ui-resizable')) {
-          localStorage.setItem('play-index', i);
-          localStorage.setItem('output-style', out[i].style.cssText);
-        }
-      });
-    }
-  }
-  function setupPlayCodeSync() {
-    var play = document.querySelectorAll('div.playground');
-    for (var i = 0; i < play.length; i++) {
-      play[i].addEventListener('input', inputHandler, false);
-
-      function inputHandler(e) {
-        localStorage.setItem('play-index', i);
-        localStorage.setItem('play-code', e.target.innerHTML);
-      }
-    }
-  }
-
-  setupPlayCodeSync();
-  setupPlayResizeSync();
-  localStorage.setItem(destSlideKey(), curSlide);
-  window.addEventListener('storage', updateOtherWindow, false);
-}
-
-// An update to local storage is caught only by the other window
-// The triggering window does not handle any sync actions
-function updateOtherWindow(e) {
-  // Ignore remove storage events which are not meant to update the other window
-  var isRemoveStorageEvent = !e.newValue;
-  if (isRemoveStorageEvent) return;
-
-  var destSlide = localStorage.getItem(destSlideKey());
-  while (destSlide > curSlide) {
-    nextSlide();
-  }
-  while (destSlide < curSlide) {
-    prevSlide();
-  }
-
-  updatePlay(e);
-  updateNotes();
 }

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // ssadump: a tool for displaying and interpreting the SSA form of Go programs.
 package main // import "golang.org/x/tools/cmd/ssadump"
 
@@ -15,51 +17,57 @@ import (
 	"runtime/pprof"
 
 	"golang.org/x/tools/go/buildutil"
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/interp"
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
-// flags
 var (
-	mode = ssa.BuilderMode(0)
+	modeFlag = ssa.BuilderModeFlag(flag.CommandLine, "build", 0)
 
-	testFlag = flag.Bool("test", false, "include implicit test packages and executables")
+	testFlag = flag.Bool("test", false, "Loads test code (*_test.go) for imported packages.")
 
-	runFlag = flag.Bool("run", false, "interpret the SSA program")
+	runFlag = flag.Bool("run", false, "Invokes the SSA interpreter on the program.")
 
 	interpFlag = flag.String("interp", "", `Options controlling the SSA test interpreter.
 The value is a sequence of zero or more more of these letters:
 R	disable [R]ecover() from panic; show interpreter crash instead.
 T	[T]race execution of the program.  Best for single-threaded programs!
 `)
-
-	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-
-	args stringListValue
 )
 
-func init() {
-	flag.Var(&mode, "build", ssa.BuilderModeDoc)
-	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
-	flag.Var(&args, "arg", "add argument to interpreted program")
-}
-
 const usage = `SSA builder and interpreter.
-Usage: ssadump [-build=[DBCSNFLG]] [-test] [-run] [-interp=[TR]] [-arg=...] package...
+Usage: ssadump [<flag> ...] <args> ...
 Use -help flag to display options.
 
 Examples:
 % ssadump -build=F hello.go              # dump SSA form of a single package
-% ssadump -build=F -test fmt             # dump SSA form of a package and its tests
 % ssadump -run -interp=T hello.go        # interpret a program, with tracing
-
-The -run flag causes ssadump to build the code in a runnable form and run the first
-package named main.
-
-Interpretation of the standard "testing" package is no longer supported.
+% ssadump -run -test unicode -- -test.v  # interpret the unicode package's tests, verbosely
+` + loader.FromArgsUsage +
+	`
+When -run is specified, ssadump will run the program.
+The entry point depends on the -test flag:
+if clear, it runs the first package named main.
+if set, it runs the tests of each package.
 `
+
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+
+func init() {
+	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
+
+	// If $GOMAXPROCS isn't set, use the full capacity of the machine.
+	// For small machines, use at least 4 threads.
+	if os.Getenv("GOMAXPROCS") == "" {
+		n := runtime.NumCPU()
+		if n < 4 {
+			n = 4
+		}
+		runtime.GOMAXPROCS(n)
+	}
+}
 
 func main() {
 	if err := doMain(); err != nil {
@@ -70,24 +78,17 @@ func main() {
 
 func doMain() error {
 	flag.Parse()
-	if len(flag.Args()) == 0 {
-		fmt.Fprint(os.Stderr, usage)
-		os.Exit(1)
-	}
+	args := flag.Args()
 
-	cfg := &packages.Config{
-		Mode:  packages.LoadSyntax,
-		Tests: *testFlag,
-	}
+	conf := loader.Config{Build: &build.Default}
 
 	// Choose types.Sizes from conf.Build.
-	// TODO(adonovan): remove this when go/packages provides a better way.
 	var wordSize int64 = 8
-	switch build.Default.GOARCH {
+	switch conf.Build.GOARCH {
 	case "386", "arm":
 		wordSize = 4
 	}
-	sizes := &types.StdSizes{
+	conf.TypeChecker.Sizes = &types.StdSizes{
 		MaxAlign: 8,
 		WordSize: wordSize,
 	}
@@ -104,6 +105,11 @@ func doMain() error {
 		}
 	}
 
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(1)
+	}
+
 	// Profiling support.
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -115,57 +121,60 @@ func doMain() error {
 		defer pprof.StopCPUProfile()
 	}
 
-	// Load, parse and type-check the initial packages,
-	// and, if -run, their dependencies.
-	if *runFlag {
-		cfg.Mode = packages.LoadAllSyntax
-	}
-	initial, err := packages.Load(cfg, flag.Args()...)
+	// Use the initial packages from the command line.
+	args, err := conf.FromArgs(args, *testFlag)
 	if err != nil {
 		return err
 	}
-	if len(initial) == 0 {
-		return fmt.Errorf("no packages")
-	}
-	if packages.PrintErrors(initial) > 0 {
-		return fmt.Errorf("packages contain errors")
-	}
 
-	// Turn on instantiating generics during build if the program will be run.
+	// The interpreter needs the runtime package.
 	if *runFlag {
-		mode |= ssa.InstantiateGenerics
+		conf.Import("runtime")
 	}
 
-	// Create SSA-form program representation.
-	prog, pkgs := ssautil.AllPackages(initial, mode)
-
-	for i, p := range pkgs {
-		if p == nil {
-			return fmt.Errorf("cannot build SSA for package %s", initial[i])
-		}
+	// Load, parse and type-check the whole program.
+	iprog, err := conf.Load()
+	if err != nil {
+		return err
 	}
 
-	if !*runFlag {
-		// Build and display only the initial packages
-		// (and synthetic wrappers).
-		for _, p := range pkgs {
-			p.Build()
-		}
+	// Create and build SSA-form program representation.
+	prog := ssautil.CreateProgram(iprog, *modeFlag)
 
-	} else {
-		// Run the interpreter.
-		// Build SSA for all packages.
+	// Build and display only the initial packages
+	// (and synthetic wrappers), unless -run is specified.
+	for _, info := range iprog.InitialPackages() {
+		prog.Package(info.Pkg).Build()
+	}
+
+	// Run the interpreter.
+	if *runFlag {
 		prog.Build()
 
-		// Earlier versions of the interpreter needed the runtime
-		// package; however, interp cannot handle unsafe constructs
-		// used during runtime's package initialization at the moment.
-		// The key construct blocking support is:
-		//    *((*T)(unsafe.Pointer(p)))
-		// Unfortunately, this means only trivial programs can be
-		// interpreted by ssadump.
-		if prog.ImportedPackage("runtime") != nil {
-			return fmt.Errorf("-run: program depends on runtime package (interpreter can run only trivial programs)")
+		var main *ssa.Package
+		pkgs := prog.AllPackages()
+		if *testFlag {
+			// If -test, run all packages' tests.
+			if len(pkgs) > 0 {
+				main = prog.CreateTestMainPackage(pkgs...)
+			}
+			if main == nil {
+				return fmt.Errorf("no tests")
+			}
+		} else {
+			// Otherwise, run main.main.
+			for _, pkg := range pkgs {
+				if pkg.Pkg.Name() == "main" {
+					main = pkg
+					if main.Func("main") == nil {
+						return fmt.Errorf("no func main() in main package")
+					}
+					break
+				}
+			}
+			if main == nil {
+				return fmt.Errorf("no main package")
+			}
 		}
 
 		if runtime.GOARCH != build.Default.GOARCH {
@@ -173,27 +182,7 @@ func doMain() error {
 				build.Default.GOARCH, runtime.GOARCH)
 		}
 
-		// Run first main package.
-		for _, main := range ssautil.MainPackages(pkgs) {
-			fmt.Fprintf(os.Stderr, "Running: %s\n", main.Pkg.Path())
-			os.Exit(interp.Interpret(main, interpMode, sizes, main.Pkg.Path(), args))
-		}
-		return fmt.Errorf("no main package")
+		interp.Interpret(main, interpMode, conf.TypeChecker.Sizes, main.Pkg.Path(), args)
 	}
 	return nil
 }
-
-// stringListValue is a flag.Value that accumulates strings.
-// e.g. --flag=one --flag=two would produce []string{"one", "two"}.
-type stringListValue []string
-
-func newStringListValue(val []string, p *[]string) *stringListValue {
-	*p = val
-	return (*stringListValue)(p)
-}
-
-func (ss *stringListValue) Get() interface{} { return []string(*ss) }
-
-func (ss *stringListValue) String() string { return fmt.Sprintf("%q", *ss) }
-
-func (ss *stringListValue) Set(s string) error { *ss = append(*ss, s); return nil }

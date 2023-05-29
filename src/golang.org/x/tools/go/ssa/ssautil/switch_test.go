@@ -4,7 +4,6 @@
 
 // No testdata on Android.
 
-//go:build !android
 // +build !android
 
 package ssautil_test
@@ -34,7 +33,7 @@ func TestSwitches(t *testing.T) {
 		return
 	}
 
-	prog := ssautil.CreateProgram(iprog, ssa.BuilderMode(0))
+	prog := ssautil.CreateProgram(iprog, 0)
 	mainPkg := prog.Package(iprog.Created[0].Pkg)
 	mainPkg.Build()
 

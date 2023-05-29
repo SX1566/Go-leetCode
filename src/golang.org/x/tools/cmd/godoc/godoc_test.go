@@ -1,63 +1,125 @@
-// Copyright 2013 The Go Authors. All rights reserved.
+// Copyright 2013 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package main_test
 
 import (
+	"bufio"
 	"bytes"
-	"context"
 	"fmt"
-	"go/build"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/tools/go/packages/packagestest"
-	"golang.org/x/tools/internal/testenv"
 )
 
-func TestMain(m *testing.M) {
-	if os.Getenv("GODOC_TEST_IS_GODOC") != "" {
-		main()
-		os.Exit(0)
-	}
-
-	// Inform subprocesses that they should run the cmd/godoc main instead of
-	// running tests. It's a close approximation to building and running the real
-	// command, and much less complicated and expensive to build and clean up.
-	os.Setenv("GODOC_TEST_IS_GODOC", "1")
-
-	os.Exit(m.Run())
+var godocTests = []struct {
+	args      []string
+	matches   []string // regular expressions
+	dontmatch []string // regular expressions
+}{
+	{
+		args: []string{"fmt"},
+		matches: []string{
+			`import "fmt"`,
+			`Package fmt implements formatted I/O`,
+		},
+	},
+	{
+		args: []string{"io", "WriteString"},
+		matches: []string{
+			`func WriteString\(`,
+			`WriteString writes the contents of the string s to w`,
+		},
+	},
+	{
+		args: []string{"nonexistingpkg"},
+		matches: []string{
+			`no such file or directory|does not exist|cannot find the file`,
+		},
+	},
+	{
+		args: []string{"fmt", "NonexistentSymbol"},
+		matches: []string{
+			`No match found\.`,
+		},
+	},
+	{
+		args: []string{"-src", "syscall", "Open"},
+		matches: []string{
+			`func Open\(`,
+		},
+		dontmatch: []string{
+			`No match found\.`,
+		},
+	},
 }
 
-var exe struct {
-	path string
-	err  error
-	once sync.Once
+// buildGodoc builds the godoc executable.
+// It returns its path, and a cleanup function.
+//
+// TODO(adonovan): opt: do this at most once, and do the cleanup
+// exactly once.  How though?  There's no atexit.
+func buildGodoc(t *testing.T) (bin string, cleanup func()) {
+	if runtime.GOARCH == "arm" {
+		t.Skip("skipping test on arm platforms; too slow")
+	}
+	tmp, err := ioutil.TempDir("", "godoc-regtest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cleanup == nil { // probably, go build failed.
+			os.RemoveAll(tmp)
+		}
+	}()
+
+	bin = filepath.Join(tmp, "godoc")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	cmd := exec.Command("go", "build", "-o", bin)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Building godoc: %v", err)
+	}
+
+	return bin, func() { os.RemoveAll(tmp) }
 }
 
-func godocPath(t *testing.T) string {
-	switch runtime.GOOS {
-	case "js", "ios":
-		t.Skipf("skipping test that requires exec")
+// Basic regression test for godoc command-line tool.
+func TestCLI(t *testing.T) {
+	bin, cleanup := buildGodoc(t)
+	defer cleanup()
+	for _, test := range godocTests {
+		cmd := exec.Command(bin, test.args...)
+		cmd.Args[0] = "godoc"
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("Running with args %#v: %v", test.args, err)
+			continue
+		}
+		for _, pat := range test.matches {
+			re := regexp.MustCompile(pat)
+			if !re.Match(out) {
+				t.Errorf("godoc %v =\n%s\nwanted /%v/", strings.Join(test.args, " "), out, pat)
+			}
+		}
+		for _, pat := range test.dontmatch {
+			re := regexp.MustCompile(pat)
+			if re.Match(out) {
+				t.Errorf("godoc %v =\n%s\ndid not want /%v/", strings.Join(test.args, " "), out, pat)
+			}
+		}
 	}
-
-	exe.once.Do(func() {
-		exe.path, exe.err = os.Executable()
-	})
-	if exe.err != nil {
-		t.Fatal(exe.err)
-	}
-	return exe.path
 }
 
 func serverAddress(t *testing.T) string {
@@ -72,318 +134,149 @@ func serverAddress(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func waitForServerReady(t *testing.T, ctx context.Context, cmd *exec.Cmd, addr string) {
-	waitForServer(t, ctx,
+func waitForServerReady(t *testing.T, addr string) {
+	waitForServer(t,
 		fmt.Sprintf("http://%v/", addr),
-		"Go Documentation Server",
-		false)
+		"The Go Programming Language",
+		5*time.Second)
 }
 
-func waitForSearchReady(t *testing.T, ctx context.Context, cmd *exec.Cmd, addr string) {
-	waitForServer(t, ctx,
+func waitForSearchReady(t *testing.T, addr string) {
+	waitForServer(t,
 		fmt.Sprintf("http://%v/search?q=FALLTHROUGH", addr),
 		"The list of tokens.",
-		false)
+		2*time.Minute)
 }
 
-func waitUntilScanComplete(t *testing.T, ctx context.Context, addr string) {
-	waitForServer(t, ctx,
-		fmt.Sprintf("http://%v/pkg", addr),
-		"Scan is not yet complete",
-		// setting reverse as true, which means this waits
-		// until the string is not returned in the response anymore
-		true)
-}
+const pollInterval = 200 * time.Millisecond
 
-const pollInterval = 50 * time.Millisecond
-
-// waitForServer waits for server to meet the required condition,
-// failing the test if ctx is canceled before that occurs.
-func waitForServer(t *testing.T, ctx context.Context, url, match string, reverse bool) {
-	start := time.Now()
-	for {
-		if ctx.Err() != nil {
-			t.Helper()
-			t.Fatalf("server failed to respond in %v", time.Since(start))
-		}
-
+func waitForServer(t *testing.T, url, match string, timeout time.Duration) {
+	// "health check" duplicated from x/tools/cmd/tipgodoc/tip.go
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
 		time.Sleep(pollInterval)
 		res, err := http.Get(url)
 		if err != nil {
 			continue
 		}
-		body, err := ioutil.ReadAll(res.Body)
+		rbody, err := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-		if err != nil || res.StatusCode != http.StatusOK {
-			continue
-		}
-		switch {
-		case !reverse && bytes.Contains(body, []byte(match)),
-			reverse && !bytes.Contains(body, []byte(match)):
+		if err == nil && res.StatusCode == http.StatusOK &&
+			bytes.Contains(rbody, []byte(match)) {
 			return
 		}
 	}
+	t.Fatalf("Server failed to respond in %v", timeout)
 }
 
-// hasTag checks whether a given release tag is contained in the current version
-// of the go binary.
-func hasTag(t string) bool {
-	for _, v := range build.Default.ReleaseTags {
-		if t == v {
-			return true
-		}
-	}
-	return false
-}
-
-func TestURL(t *testing.T) {
-	if runtime.GOOS == "plan9" {
-		t.Skip("skipping on plan9; fails to start up quickly enough")
-	}
-	bin := godocPath(t)
-
-	testcase := func(url string, contents string) func(t *testing.T) {
-		return func(t *testing.T) {
-			stdout, stderr := new(bytes.Buffer), new(bytes.Buffer)
-
-			args := []string{fmt.Sprintf("-url=%s", url)}
-			cmd := testenv.Command(t, bin, args...)
-			cmd.Stdout = stdout
-			cmd.Stderr = stderr
-			cmd.Args[0] = "godoc"
-
-			// Set GOPATH variable to a non-existing absolute path
-			// and GOPROXY=off to disable module fetches.
-			// We cannot just unset GOPATH variable because godoc would default it to ~/go.
-			// (We don't want the indexer looking at the local workspace during tests.)
-			cmd.Env = append(os.Environ(),
-				"GOPATH=/does_not_exist",
-				"GOPROXY=off",
-				"GO111MODULE=off")
-
-			if err := cmd.Run(); err != nil {
-				t.Fatalf("failed to run godoc -url=%q: %s\nstderr:\n%s", url, err, stderr)
-			}
-
-			if !strings.Contains(stdout.String(), contents) {
-				t.Errorf("did not find substring %q in output of godoc -url=%q:\n%s", contents, url, stdout)
-			}
-		}
-	}
-
-	t.Run("index", testcase("/", "These packages are part of the Go Project but outside the main Go tree."))
-	t.Run("fmt", testcase("/pkg/fmt", "Package fmt implements formatted I/O"))
+func killAndWait(cmd *exec.Cmd) {
+	cmd.Process.Kill()
+	cmd.Wait()
 }
 
 // Basic integration test for godoc HTTP interface.
 func TestWeb(t *testing.T) {
-	bin := godocPath(t)
-
-	for _, x := range packagestest.All {
-		t.Run(x.Name(), func(t *testing.T) {
-			testWeb(t, x, bin, false)
-		})
-	}
+	testWeb(t, false)
 }
 
 // Basic integration test for godoc HTTP interface.
 func TestWebIndex(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping slow test in -short mode")
+		t.Skip("skipping test in -short mode")
 	}
-	bin := godocPath(t)
-	testWeb(t, packagestest.GOPATH, bin, true)
+	testWeb(t, true)
 }
 
 // Basic integration test for godoc HTTP interface.
-func testWeb(t *testing.T, x packagestest.Exporter, bin string, withIndex bool) {
-	switch runtime.GOOS {
-	case "plan9":
-		t.Skip("skipping on plan9: fails to start up quickly enough")
-	case "android", "ios":
-		t.Skip("skipping on mobile: lacks GOROOT/api in test environment")
-	}
-
-	// Write a fake GOROOT/GOPATH with some third party packages.
-	e := packagestest.Export(t, x, []packagestest.Module{
-		{
-			Name: "godoc.test/repo1",
-			Files: map[string]interface{}{
-				"a/a.go": `// Package a is a package in godoc.test/repo1.
-package a; import _ "godoc.test/repo2/a"; const Name = "repo1a"`,
-				"b/b.go": `package b; const Name = "repo1b"`,
-			},
-		},
-		{
-			Name: "godoc.test/repo2",
-			Files: map[string]interface{}{
-				"a/a.go": `package a; const Name = "repo2a"`,
-				"b/b.go": `package b; const Name = "repo2b"`,
-			},
-		},
-	})
-	defer e.Cleanup()
-
-	// Start the server.
+func testWeb(t *testing.T, withIndex bool) {
+	bin, cleanup := buildGodoc(t)
+	defer cleanup()
 	addr := serverAddress(t)
 	args := []string{fmt.Sprintf("-http=%s", addr)}
 	if withIndex {
 		args = append(args, "-index", "-index_interval=-1s")
 	}
-	cmd := testenv.Command(t, bin, args...)
-	cmd.Dir = e.Config.Dir
-	cmd.Env = e.Config.Env
-	cmdOut := new(strings.Builder)
-	cmd.Stdout = cmdOut
-	cmd.Stderr = cmdOut
+	cmd := exec.Command(bin, args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	cmd.Args[0] = "godoc"
-
+	cmd.Env = godocEnv()
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start godoc: %s", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		err := cmd.Wait()
-		t.Logf("%v: %v", cmd, err)
-		cancel()
-	}()
-	defer func() {
-		// Shut down the server cleanly if possible.
-		if runtime.GOOS == "windows" {
-			cmd.Process.Kill() // Windows doesn't support os.Interrupt.
-		} else {
-			cmd.Process.Signal(os.Interrupt)
-		}
-		<-ctx.Done()
-		t.Logf("server output:\n%s", cmdOut)
-	}()
+	defer killAndWait(cmd)
 
 	if withIndex {
-		waitForSearchReady(t, ctx, cmd, addr)
+		waitForSearchReady(t, addr)
 	} else {
-		waitForServerReady(t, ctx, cmd, addr)
-		waitUntilScanComplete(t, ctx, addr)
+		waitForServerReady(t, addr)
 	}
 
 	tests := []struct {
-		path        string
-		contains    []string // substring
-		match       []string // regexp
-		notContains []string
-		needIndex   bool
-		releaseTag  string // optional release tag that must be in go/build.ReleaseTags
+		path      string
+		match     []string
+		dontmatch []string
+		needIndex bool
 	}{
 		{
-			path: "/",
-			contains: []string{
-				"Go Documentation Server",
-				"Standard library",
-				"These packages are part of the Go Project but outside the main Go tree.",
-			},
+			path:  "/",
+			match: []string{"Go is an open source programming language"},
 		},
 		{
-			path:     "/pkg/fmt/",
-			contains: []string{"Package fmt implements formatted I/O"},
+			path:  "/pkg/fmt/",
+			match: []string{"Package fmt implements formatted I/O"},
 		},
 		{
-			path:     "/src/fmt/",
-			contains: []string{"scan_test.go"},
+			path:  "/src/fmt/",
+			match: []string{"scan_test.go"},
 		},
 		{
-			path:     "/src/fmt/print.go",
-			contains: []string{"// Println formats using"},
+			path:  "/src/fmt/print.go",
+			match: []string{"// Println formats using"},
 		},
 		{
 			path: "/pkg",
-			contains: []string{
+			match: []string{
 				"Standard library",
 				"Package fmt implements formatted I/O",
-				"Third party",
-				"Package a is a package in godoc.test/repo1.",
 			},
-			notContains: []string{
+			dontmatch: []string{
 				"internal/syscall",
 				"cmd/gc",
 			},
 		},
 		{
 			path: "/pkg/?m=all",
-			contains: []string{
+			match: []string{
 				"Standard library",
 				"Package fmt implements formatted I/O",
-				"internal/syscall/?m=all",
+				"internal/syscall",
 			},
-			notContains: []string{
+			dontmatch: []string{
 				"cmd/gc",
 			},
 		},
 		{
-			path: "/search?q=ListenAndServe",
-			contains: []string{
+			path: "/search?q=notwithstanding",
+			match: []string{
 				"/src",
 			},
-			notContains: []string{
+			dontmatch: []string{
 				"/pkg/bootstrap",
 			},
 			needIndex: true,
 		},
 		{
 			path: "/pkg/strings/",
-			contains: []string{
+			match: []string{
 				`href="/src/strings/strings.go"`,
 			},
 		},
 		{
 			path: "/cmd/compile/internal/amd64/",
-			contains: []string{
-				`href="/src/cmd/compile/internal/amd64/ssa.go"`,
-			},
-		},
-		{
-			path: "/pkg/math/bits/",
-			contains: []string{
-				`Added in Go 1.9`,
-			},
-		},
-		{
-			path: "/pkg/net/",
-			contains: []string{
-				`// IPv6 scoped addressing zone; added in Go 1.1`,
-			},
-		},
-		{
-			path: "/pkg/net/http/httptrace/",
 			match: []string{
-				`Got1xxResponse.*// Go 1\.11`,
+				`href="/src/cmd/compile/internal/amd64/reg.go"`,
 			},
-			releaseTag: "go1.11",
-		},
-		// Verify we don't add version info to a struct field added the same time
-		// as the struct itself:
-		{
-			path: "/pkg/net/http/httptrace/",
-			match: []string{
-				`(?m)GotFirstResponseByte func\(\)\s*$`,
-			},
-		},
-		// Remove trailing periods before adding semicolons:
-		{
-			path: "/pkg/database/sql/",
-			contains: []string{
-				"The number of connections currently in use; added in Go 1.11",
-				"The number of idle connections; added in Go 1.11",
-			},
-			releaseTag: "go1.11",
-		},
-
-		// Third party packages.
-		{
-			path:     "/pkg/godoc.test/repo1/a",
-			contains: []string{`const <span id="Name">Name</span> = &#34;repo1a&#34;`},
-		},
-		{
-			path:     "/pkg/godoc.test/repo2/b",
-			contains: []string{`const <span id="Name">Name</span> = &#34;repo2b&#34;`},
 		},
 	}
 	for _, test := range tests {
@@ -397,34 +290,18 @@ package a; import _ "godoc.test/repo2/a"; const Name = "repo1a"`,
 			continue
 		}
 		body, err := ioutil.ReadAll(resp.Body)
-		strBody := string(body)
 		resp.Body.Close()
 		if err != nil {
 			t.Errorf("GET %s: failed to read body: %s (response: %v)", url, err, resp)
 		}
 		isErr := false
-		for _, substr := range test.contains {
-			if test.releaseTag != "" && !hasTag(test.releaseTag) {
-				continue
-			}
+		for _, substr := range test.match {
 			if !bytes.Contains(body, []byte(substr)) {
 				t.Errorf("GET %s: wanted substring %q in body", url, substr)
 				isErr = true
 			}
 		}
-		for _, re := range test.match {
-			if test.releaseTag != "" && !hasTag(test.releaseTag) {
-				continue
-			}
-			if ok, err := regexp.MatchString(re, strBody); !ok || err != nil {
-				if err != nil {
-					t.Fatalf("Bad regexp %q: %v", re, err)
-				}
-				t.Errorf("GET %s: wanted to match %s in body", url, re)
-				isErr = true
-			}
-		}
-		for _, substr := range test.notContains {
+		for _, substr := range test.dontmatch {
 			if bytes.Contains(body, []byte(substr)) {
 				t.Errorf("GET %s: didn't want substring %q in body", url, substr)
 				isErr = true
@@ -436,29 +313,140 @@ package a; import _ "godoc.test/repo2/a"; const Name = "repo1a"`,
 	}
 }
 
-// Test for golang.org/issue/35476.
-func TestNoMainModule(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping test in -short mode")
-	}
+// Basic integration test for godoc -analysis=type (via HTTP interface).
+func TestTypeAnalysis(t *testing.T) {
 	if runtime.GOOS == "plan9" {
-		t.Skip("skipping on plan9; for consistency with other tests that build godoc binary")
+		t.Skip("skipping test on plan9 (issue #11974)") // see comment re: Plan 9 below
 	}
-	bin := godocPath(t)
-	tempDir := t.TempDir()
 
-	// Run godoc in an empty directory with module mode explicitly on,
-	// so that 'go env GOMOD' reports os.DevNull.
-	cmd := testenv.Command(t, bin, "-url=/")
-	cmd.Dir = tempDir
-	cmd.Env = append(os.Environ(), "GO111MODULE=on")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	// Write a fake GOROOT/GOPATH.
+	tmpdir, err := ioutil.TempDir("", "godoc-analysis")
 	if err != nil {
-		t.Fatalf("godoc command failed: %v\nstderr=%q", err, stderr.String())
+		t.Fatalf("ioutil.TempDir failed: %s", err)
 	}
-	if strings.Contains(stderr.String(), "go mod download") {
-		t.Errorf("stderr contains 'go mod download', is that intentional?\nstderr=%q", stderr.String())
+	defer os.RemoveAll(tmpdir)
+	for _, f := range []struct{ file, content string }{
+		{"goroot/src/lib/lib.go", `
+package lib
+type T struct{}
+const C = 3
+var V T
+func (T) F() int { return C }
+`},
+		{"gopath/src/app/main.go", `
+package main
+import "lib"
+func main() { print(lib.V) }
+`},
+	} {
+		file := filepath.Join(tmpdir, f.file)
+		if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
+			t.Fatalf("MkdirAll(%s) failed: %s", filepath.Dir(file), err)
+		}
+		if err := ioutil.WriteFile(file, []byte(f.content), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
+
+	// Start the server.
+	bin, cleanup := buildGodoc(t)
+	defer cleanup()
+	addr := serverAddress(t)
+	cmd := exec.Command(bin, fmt.Sprintf("-http=%s", addr), "-analysis=type")
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GOROOT=%s", filepath.Join(tmpdir, "goroot")))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GOPATH=%s", filepath.Join(tmpdir, "gopath")))
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "GOROOT=") || strings.HasPrefix(e, "GOPATH=") {
+			continue
+		}
+		cmd.Env = append(cmd.Env, e)
+	}
+	cmd.Stdout = os.Stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Args[0] = "godoc"
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start godoc: %s", err)
+	}
+	defer killAndWait(cmd)
+	waitForServerReady(t, addr)
+
+	// Wait for type analysis to complete.
+	reader := bufio.NewReader(stderr)
+	for {
+		s, err := reader.ReadString('\n') // on Plan 9 this fails
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprint(os.Stderr, s)
+		if strings.Contains(s, "Type analysis complete.") {
+			break
+		}
+	}
+	go io.Copy(os.Stderr, reader)
+
+	t0 := time.Now()
+
+	// Make an HTTP request and check for a regular expression match.
+	// The patterns are very crude checks that basic type information
+	// has been annotated onto the source view.
+tryagain:
+	for _, test := range []struct{ url, pattern string }{
+		{"/src/lib/lib.go", "L2.*package .*Package docs for lib.*/lib"},
+		{"/src/lib/lib.go", "L3.*type .*type info for T.*struct"},
+		{"/src/lib/lib.go", "L5.*var V .*type T struct"},
+		{"/src/lib/lib.go", "L6.*func .*type T struct.*T.*return .*const C untyped int.*C"},
+
+		{"/src/app/main.go", "L2.*package .*Package docs for app"},
+		{"/src/app/main.go", "L3.*import .*Package docs for lib.*lib"},
+		{"/src/app/main.go", "L4.*func main.*package lib.*lib.*var lib.V lib.T.*V"},
+	} {
+		url := fmt.Sprintf("http://%s%s", addr, test.url)
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Errorf("GET %s failed: %s", url, err)
+			continue
+		}
+		body, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Errorf("GET %s: failed to read body: %s (response: %v)", url, err, resp)
+			continue
+		}
+
+		if !bytes.Contains(body, []byte("Static analysis features")) {
+			// Type analysis results usually become available within
+			// ~4ms after godoc startup (for this input on my machine).
+			if elapsed := time.Since(t0); elapsed > 500*time.Millisecond {
+				t.Fatalf("type analysis results still unavailable after %s", elapsed)
+			}
+			time.Sleep(10 * time.Millisecond)
+			goto tryagain
+		}
+
+		match, err := regexp.Match(test.pattern, body)
+		if err != nil {
+			t.Errorf("regexp.Match(%q) failed: %s", test.pattern, err)
+			continue
+		}
+		if !match {
+			// This is a really ugly failure message.
+			t.Errorf("GET %s: body doesn't match %q, got:\n%s",
+				url, test.pattern, string(body))
+		}
+	}
+}
+
+// godocEnv returns the process environment without the GOPATH variable.
+// (We don't want the indexer looking at the local workspace during tests.)
+func godocEnv() (env []string) {
+	for _, v := range os.Environ() {
+		if strings.HasPrefix(v, "GOPATH=") {
+			continue
+		}
+		env = append(env, v)
+	}
+	return
 }

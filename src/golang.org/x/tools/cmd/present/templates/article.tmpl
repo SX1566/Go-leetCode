@@ -31,21 +31,13 @@
       <div class="container">
         <div id="heading">{{.Title}}
           {{with .Subtitle}}{{.}}{{end}}
-          {{if .Authors}}
-            {{range .Authors}}
-              <div class="author">
-                {{range .Elem}}{{elem $.Template .}}{{end}}
-              </div>
-            {{end}}
-          {{end}}
         </div>
       </div>
     </div>
     <div id="page" class="wide">
       <div class="container">
         {{with .Sections}}
-          <div id="toc" class="no-print">
-            <div id="tochead">Contents</div>
+          <div id="toc">
             {{template "TOC" .}}
           </div>
         {{end}}
@@ -54,6 +46,14 @@
           {{elem $.Template .}}
         {{end}}{{/* of Section block */}}
 
+        {{if .Authors}}
+          <h2>Authors</h2>
+          {{range .Authors}}
+            <div class="author">
+              {{range .Elem}}{{elem $.Template .}}{{end}}
+            </div>
+          {{end}}
+        {{end}}
       </div>
     </div>
 
@@ -76,19 +76,10 @@
 {{end}}
 
 {{define "TOC"}}
-  <ul class="toc-outer">
+  <ul>
   {{range .}}
     <li><a href="#TOC_{{.FormattedNumber}}">{{.Title}}</a></li>
-    {{with .Sections}}{{template "TOC-Inner" .}}{{end}}
-  {{end}}
-  </ul>
-{{end}}
-
-{{define "TOC-Inner"}}
-  <ul class="toc-inner">
-  {{range .}}
-    <li><a href="#TOC_{{.FormattedNumber}}">{{.Title}}</a></li>
-    {{with .Sections}}{{template "TOC-Inner" .}}{{end}}
+    {{with .Sections}}{{template "TOC" .}}{{end}}
   {{end}}
   </ul>
 {{end}}

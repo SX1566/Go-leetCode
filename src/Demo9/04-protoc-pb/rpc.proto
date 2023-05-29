@@ -1,0 +1,41 @@
+// 指定版本 默认proto2
+syntax = "proto3";
+
+// 指定所在包包名
+package pb;
+
+//定义枚举类型
+enum Week{
+  //枚举值必须从0开始
+  Monday = 0;
+  Tuesday = 1;
+
+
+}
+
+//定义消息体
+message Student{
+  int32 age = 1; //可以不从1开始但是不能重复,不能使用19000-19999
+  string name = 2;
+  People p = 3;
+  repeated  int32 score = 4; // 数组
+  //枚举
+  Week w = 5;
+  //联合体
+  oneof data{
+    string teacher = 6;
+    string class = 7;
+  }
+
+}
+
+message  People{
+  int32 weight = 1;
+
+}
+
+//默认是不编译服务的，如果想编译，就要用grpc
+//使用的编译指令是 protoc --go_out=plugins=grpc:./ xxx.proto
+service test{
+  rpc Say(People) returns (Student);
+}

@@ -2,18 +2,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 // This file implements access to export data from source.
 
 package main
 
-import "go/types"
+import (
+	"golang.org/x/tools/go/types"
+)
 
 func init() {
-	register("source", sourceImporter{})
+	register("source", sourceImporter)
 }
 
-type sourceImporter struct{}
-
-func (sourceImporter) Import(path string) (*types.Package, error) {
+func sourceImporter(packages map[string]*types.Package, path string) (*types.Package, error) {
 	panic("unimplemented")
 }

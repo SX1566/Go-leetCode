@@ -8,12 +8,12 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	exec "golang.org/x/sys/execabs"
 	"html/template"
 	"io"
 	"io/ioutil"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -66,9 +66,6 @@ func htmlOutput(profile, outfile string) error {
 		out, err = os.Create(filepath.Join(dir, "coverage.html"))
 	} else {
 		out, err = os.Create(outfile)
-	}
-	if err != nil {
-		return err
 	}
 	err = htmlTemplate.Execute(out, d)
 	if err == nil {

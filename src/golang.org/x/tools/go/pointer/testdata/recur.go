@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -9,4 +8,4 @@ func main() {
 	main()
 }
 
-// @calls command-line-arguments.main -> command-line-arguments.main
+// @calls main.main -> main.main

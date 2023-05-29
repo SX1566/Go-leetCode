@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package interp
 
 // Custom hashtable atop map.
@@ -38,7 +40,7 @@ type hashmap struct {
 
 // makeMap returns an empty initialized map of key type kt,
 // preallocating space for reserve elements.
-func makeMap(kt types.Type, reserve int64) value {
+func makeMap(kt types.Type, reserve int) value {
 	if usesBuiltinMap(kt) {
 		return make(map[value]value, reserve)
 	}
@@ -110,12 +112,4 @@ func (m *hashmap) len() int {
 		return m.length
 	}
 	return 0
-}
-
-// entries returns a rangeable map of entries.
-func (m *hashmap) entries() map[int]*entry {
-	if m != nil {
-		return m.table
-	}
-	return nil
 }

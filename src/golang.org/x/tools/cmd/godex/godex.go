@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package main
 
 import (
@@ -9,11 +11,12 @@ import (
 	"flag"
 	"fmt"
 	"go/build"
-	"go/types"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/tools/go/types"
 )
 
 var (
@@ -23,10 +26,13 @@ var (
 
 // lists of registered sources and corresponding importers
 var (
-	sources         []string
-	importers       []types.Importer
-	errImportFailed = errors.New("import failed")
+	sources      []string
+	importers    []types.Importer
+	importFailed = errors.New("import failed")
 )
+
+// map of imported packages
+var packages = make(map[string]*types.Package)
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: godex [flags] {path|qualifiedIdent}")
@@ -47,7 +53,7 @@ func main() {
 		report("no package name, path, or file provided")
 	}
 
-	var imp types.Importer = new(tryImporters)
+	imp := tryImports
 	if *source != "" {
 		imp = lookup(*source)
 		if imp == nil {
@@ -65,7 +71,7 @@ func main() {
 		go genPrefixes(prefixes, !filepath.IsAbs(path) && !build.IsLocalImport(path))
 
 		// import package
-		pkg, err := tryPrefixes(prefixes, path, imp)
+		pkg, err := tryPrefixes(packages, prefixes, path, imp)
 		if err != nil {
 			logf("\t=> ignoring %q: %s\n", path, err)
 			continue
@@ -109,7 +115,7 @@ func splitPathIdent(arg string) (path, name string) {
 // tryPrefixes tries to import the package given by (the possibly partial) path using the given importer imp
 // by prepending all possible prefixes to path. It returns with the first package that it could import, or
 // with an error.
-func tryPrefixes(prefixes chan string, path string, imp types.Importer) (pkg *types.Package, err error) {
+func tryPrefixes(packages map[string]*types.Package, prefixes chan string, path string, imp types.Importer) (pkg *types.Package, err error) {
 	for prefix := range prefixes {
 		actual := path
 		if prefix == "" {
@@ -121,7 +127,7 @@ func tryPrefixes(prefixes chan string, path string, imp types.Importer) (pkg *ty
 			actual = filepath.Join(prefix, path)
 			logf("\ttrying prefix %q\n", prefix)
 		}
-		pkg, err = imp.Import(actual)
+		pkg, err = imp(packages, actual)
 		if err == nil {
 			break
 		}
@@ -130,14 +136,12 @@ func tryPrefixes(prefixes chan string, path string, imp types.Importer) (pkg *ty
 	return
 }
 
-// tryImporters is an importer that tries all registered importers
+// tryImports is an importer that tries all registered importers
 // successively until one of them succeeds or all of them failed.
-type tryImporters struct{}
-
-func (t *tryImporters) Import(path string) (pkg *types.Package, err error) {
+func tryImports(packages map[string]*types.Package, path string) (pkg *types.Package, err error) {
 	for i, imp := range importers {
 		logf("\t\ttrying %s import\n", sources[i])
-		pkg, err = imp.Import(path)
+		pkg, err = imp(packages, path)
 		if err == nil {
 			break
 		}
@@ -146,23 +150,17 @@ func (t *tryImporters) Import(path string) (pkg *types.Package, err error) {
 	return
 }
 
-type protector struct {
-	imp types.Importer
-}
-
-func (p *protector) Import(path string) (pkg *types.Package, err error) {
-	defer func() {
-		if recover() != nil {
-			pkg = nil
-			err = errImportFailed
-		}
-	}()
-	return p.imp.Import(path)
-}
-
 // protect protects an importer imp from panics and returns the protected importer.
 func protect(imp types.Importer) types.Importer {
-	return &protector{imp}
+	return func(packages map[string]*types.Package, path string) (pkg *types.Package, err error) {
+		defer func() {
+			if recover() != nil {
+				pkg = nil
+				err = importFailed
+			}
+		}()
+		return imp(packages, path)
+	}
 }
 
 // register registers an importer imp for a given source src.

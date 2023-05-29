@@ -1,4 +1,3 @@
-//go:build ignore
 // +build ignore
 
 package main
@@ -15,7 +14,7 @@ func chanreflect1() {
 	crv.Send(reflect.ValueOf(&a))
 	print(crv.Interface())             // @types chan *int
 	print(crv.Interface().(chan *int)) // @pointsto makechan@cr1make:12
-	print(<-ch)                        // @pointsto command-line-arguments.a
+	print(<-ch)                        // @pointsto main.a
 }
 
 func chanreflect1i() {
@@ -25,7 +24,7 @@ func chanreflect1i() {
 	reflect.ValueOf(ch).Send(reflect.ValueOf(&a))
 	v := <-ch
 	print(v)        // @types *int
-	print(v.(*int)) // @pointsto command-line-arguments.a
+	print(v.(*int)) // @pointsto main.a
 }
 
 func chanreflect2() {
@@ -34,7 +33,7 @@ func chanreflect2() {
 	crv := reflect.ValueOf(ch)
 	r, _ := crv.Recv()
 	print(r.Interface())        // @types *int
-	print(r.Interface().(*int)) // @pointsto command-line-arguments.b
+	print(r.Interface().(*int)) // @pointsto main.b
 }
 
 func chanOfRecv() {
@@ -61,8 +60,8 @@ func chanOfBoth() {
 	ch.Send(reflect.ValueOf(&b))
 	ch.Interface().(chan *int) <- &a
 	r, _ := ch.Recv()
-	print(r.Interface().(*int))         // @pointsto command-line-arguments.a | command-line-arguments.b
-	print(<-ch.Interface().(chan *int)) // @pointsto command-line-arguments.a | command-line-arguments.b
+	print(r.Interface().(*int))         // @pointsto main.a | main.b
+	print(<-ch.Interface().(chan *int)) // @pointsto main.a | main.b
 }
 
 var unknownDir reflect.ChanDir // not a constant

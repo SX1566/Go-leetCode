@@ -1,13 +1,10 @@
-// Copyright 2014 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 // The gorename command performs precise type-safe renaming of
 // identifiers in Go source code.
 //
 // Run with -help for usage information, or view the Usage constant in
 // package golang.org/x/tools/refactor/rename, which contains most of
 // the implementation.
+//
 package main // import "golang.org/x/tools/cmd/gorename"
 
 import (
@@ -45,7 +42,7 @@ func main() {
 	}
 
 	if *helpFlag || (*offsetFlag == "" && *fromFlag == "" && *toFlag == "") {
-		fmt.Print(rename.Usage)
+		fmt.Println(rename.Usage)
 		return
 	}
 

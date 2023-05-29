@@ -16,19 +16,14 @@ func init() {
 }
 
 type Link struct {
-	Cmd   string // original command from present source
 	URL   *url.URL
 	Label string
 }
 
-func (l Link) PresentCmd() string   { return l.Cmd }
 func (l Link) TemplateName() string { return "link" }
 
 func parseLink(ctx *Context, fileName string, lineno int, text string) (Elem, error) {
 	args := strings.Fields(text)
-	if len(args) < 2 {
-		return nil, fmt.Errorf("link element must have at least 2 arguments")
-	}
 	url, err := url.Parse(args[1])
 	if err != nil {
 		return nil, err
@@ -43,7 +38,7 @@ func parseLink(ctx *Context, fileName string, lineno int, text string) (Elem, er
 		}
 		label = strings.Replace(url.String(), scheme, "", 1)
 	}
-	return Link{text, url, label}, nil
+	return Link{url, label}, nil
 }
 
 func renderLink(href, text string) string {
@@ -54,7 +49,7 @@ func renderLink(href, text string) string {
 	// Open links in new window only when their url is absolute.
 	target := "_blank"
 	if u, err := url.Parse(href); err != nil {
-		log.Println("renderLink parsing url:", err)
+		log.Println("rendernLink parsing url:", err)
 	} else if !u.IsAbs() || u.Scheme == "javascript" {
 		target = "_self"
 	}
@@ -80,19 +75,19 @@ func parseInlineLink(s string) (link string, length int) {
 		return
 	}
 	if urlEnd == end {
-		simpleURL := ""
+		simpleUrl := ""
 		url, err := url.Parse(rawURL)
 		if err == nil {
 			// If the URL is http://foo.com, drop the http://
 			// In other words, render [[http://golang.org]] as:
 			//   <a href="http://golang.org">golang.org</a>
 			if strings.HasPrefix(rawURL, url.Scheme+"://") {
-				simpleURL = strings.TrimPrefix(rawURL, url.Scheme+"://")
+				simpleUrl = strings.TrimPrefix(rawURL, url.Scheme+"://")
 			} else if strings.HasPrefix(rawURL, url.Scheme+":") {
-				simpleURL = strings.TrimPrefix(rawURL, url.Scheme+":")
+				simpleUrl = strings.TrimPrefix(rawURL, url.Scheme+":")
 			}
 		}
-		return renderLink(rawURL, simpleURL), end + 2
+		return renderLink(rawURL, simpleUrl), end + 2
 	}
 	if s[urlEnd:urlEnd+2] != "][" {
 		return

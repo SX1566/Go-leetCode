@@ -275,30 +275,11 @@ func TestRandomMutations(t *testing.T) {
 	}
 }
 
-func TestLowerBound(t *testing.T) {
-	// Use random sets of sizes from 0 to about 4000.
-	prng := rand.New(rand.NewSource(0))
-	for i := uint(0); i < 12; i++ {
-		x := randomPset(prng, 1<<i)
-		for j := 0; j < 10000; j++ {
-			found := intsets.MaxInt
-			for e := range x.hash {
-				if e >= j && e < found {
-					found = e
-				}
-			}
-			if res := x.bits.LowerBound(j); res != found {
-				t.Errorf("%s: LowerBound(%d)=%d, expected %d", &x.bits, j, res, found)
-			}
-		}
-	}
-}
-
 // TestSetOperations exercises classic set operations: ∩ , ∪, \.
 func TestSetOperations(t *testing.T) {
 	prng := rand.New(rand.NewSource(0))
 
-	// Use random sets of sizes from 0 to about 4000.
+	// Use random sets of sizes from 0 to about 1000.
 	// For each operator, we test variations such as
 	// Z.op(X, Y), Z.op(X, Z) and Z.op(Z, Y) to exercise
 	// the degenerate cases of each method implementation.
@@ -460,41 +441,6 @@ func TestSetOperations(t *testing.T) {
 	}
 }
 
-// TestUnionWithChanged checks the 'changed' result of UnionWith.
-func TestUnionWithChanged(t *testing.T) {
-	setOf := func(elems ...int) *intsets.Sparse {
-		s := new(intsets.Sparse)
-		for _, elem := range elems {
-			s.Insert(elem)
-		}
-		return s
-	}
-
-	checkUnionWith := func(x, y *intsets.Sparse) {
-		xstr := x.String()
-		prelen := x.Len()
-		changed := x.UnionWith(y)
-		if (x.Len() > prelen) != changed {
-			t.Errorf("%s.UnionWith(%s) => %s, changed=%t", xstr, y, x, changed)
-		}
-	}
-
-	// The case marked "!" is a regression test for Issue 50352,
-	// which spuriously returned true when y ⊂ x.
-
-	// same block
-	checkUnionWith(setOf(1, 2), setOf(1, 2))
-	checkUnionWith(setOf(1, 2, 3), setOf(1, 2)) // !
-	checkUnionWith(setOf(1, 2), setOf(1, 2, 3))
-	checkUnionWith(setOf(1, 2), setOf())
-
-	// different blocks
-	checkUnionWith(setOf(1, 1000000), setOf(1, 1000000))
-	checkUnionWith(setOf(1, 2, 1000000), setOf(1, 2))
-	checkUnionWith(setOf(1, 2), setOf(1, 2, 1000000))
-	checkUnionWith(setOf(1, 1000000), setOf())
-}
-
 func TestIntersectionWith(t *testing.T) {
 	// Edge cases: the pairs (1,1), (1000,2000), (8000,4000)
 	// exercise the <, >, == cases in IntersectionWith that the
@@ -525,7 +471,7 @@ func TestIntersects(t *testing.T) {
 		z.IntersectionWith(y)
 
 		if got, want := x.Intersects(y), !z.IsEmpty(); got != want {
-			t.Errorf("Intersects(%s, %s): got %v, want %v (%s)", x, y, got, want, &z)
+			t.Errorf("Intersects: got %v, want %v", got, want)
 		}
 
 		// make it false
@@ -617,12 +563,12 @@ func TestFailFastOnShallowCopy(t *testing.T) {
 	y := x // shallow copy (breaks representation invariants)
 	defer func() {
 		got := fmt.Sprint(recover())
-		want := "interface conversion: interface {} is nil, not intsets.to_copy_a_sparse_you_must_call_its_Copy_method"
+		want := "A Sparse has been copied without (*Sparse).Copy()"
 		if got != want {
 			t.Errorf("shallow copy: recover() = %q, want %q", got, want)
 		}
 	}()
-	_ = y.String() // panics
+	y.String() // panics
 	t.Error("didn't panic as expected")
 }
 
@@ -633,60 +579,7 @@ func TestFailFastOnShallowCopy(t *testing.T) {
 // - Gather set distributions from pointer analysis.
 // - Measure memory usage.
 
-func benchmarkInsertProbeSparse(b *testing.B, size, spread int) {
-	prng := rand.New(rand.NewSource(0))
-	// Generate our insertions and probes beforehand (we don't want to benchmark
-	// the prng).
-	insert := make([]int, size)
-	probe := make([]int, size*2)
-	for i := range insert {
-		insert[i] = prng.Int() % spread
-	}
-	for i := range probe {
-		probe[i] = prng.Int() % spread
-	}
-
-	b.ResetTimer()
-	var x intsets.Sparse
-	for tries := 0; tries < b.N; tries++ {
-		x.Clear()
-		for _, n := range insert {
-			x.Insert(n)
-		}
-		hits := 0
-		for _, n := range probe {
-			if x.Has(n) {
-				hits++
-			}
-		}
-		// Use the variable so it doesn't get optimized away.
-		if hits > len(probe) {
-			b.Fatalf("%d hits, only %d probes", hits, len(probe))
-		}
-	}
-}
-
-func BenchmarkInsertProbeSparse_2_10(b *testing.B) {
-	benchmarkInsertProbeSparse(b, 2, 10)
-}
-
-func BenchmarkInsertProbeSparse_10_10(b *testing.B) {
-	benchmarkInsertProbeSparse(b, 10, 10)
-}
-
-func BenchmarkInsertProbeSparse_10_1000(b *testing.B) {
-	benchmarkInsertProbeSparse(b, 10, 1000)
-}
-
-func BenchmarkInsertProbeSparse_100_100(b *testing.B) {
-	benchmarkInsertProbeSparse(b, 100, 100)
-}
-
-func BenchmarkInsertProbeSparse_100_10000(b *testing.B) {
-	benchmarkInsertProbeSparse(b, 100, 1000)
-}
-
-func BenchmarkUnionDifferenceSparse(b *testing.B) {
+func BenchmarkSparseBitVector(b *testing.B) {
 	prng := rand.New(rand.NewSource(0))
 	for tries := 0; tries < b.N; tries++ {
 		var x, y, z intsets.Sparse
@@ -703,7 +596,7 @@ func BenchmarkUnionDifferenceSparse(b *testing.B) {
 	}
 }
 
-func BenchmarkUnionDifferenceHashTable(b *testing.B) {
+func BenchmarkHashTable(b *testing.B) {
 	prng := rand.New(rand.NewSource(0))
 	for tries := 0; tries < b.N; tries++ {
 		x, y, z := make(map[int]bool), make(map[int]bool), make(map[int]bool)

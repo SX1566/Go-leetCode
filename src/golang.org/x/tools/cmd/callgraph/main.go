@@ -37,8 +37,7 @@ import (
 	"golang.org/x/tools/go/callgraph/cha"
 	"golang.org/x/tools/go/callgraph/rta"
 	"golang.org/x/tools/go/callgraph/static"
-	"golang.org/x/tools/go/callgraph/vta"
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
@@ -47,7 +46,7 @@ import (
 // flags
 var (
 	algoFlag = flag.String("algo", "rta",
-		`Call graph construction algorithm (static, cha, rta, vta, pta)`)
+		`Call graph construction algorithm (static, cha, rta, pta)`)
 
 	testFlag = flag.Bool("test", false,
 		"Loads test code (*_test.go) for imported packages")
@@ -64,11 +63,11 @@ func init() {
 	flag.Var((*buildutil.TagsFlag)(&build.Default.BuildTags), "tags", buildutil.TagsFlagDoc)
 }
 
-const Usage = `callgraph: display the call graph of a Go program.
+const Usage = `callgraph: display the the call graph of a Go program.
 
 Usage:
 
-  callgraph [-algo=static|cha|rta|vta|pta] [-test] [-format=...] package...
+  callgraph [-algo=static|cha|rta|pta] [-test] [-format=...] <args>...
 
 Flags:
 
@@ -77,7 +76,6 @@ Flags:
             static      static calls only (unsound)
             cha         Class Hierarchy Analysis
             rta         Rapid Type Analysis
-            vta         Variable Type Analysis
             pta         inclusion-based Points-To Analysis
 
            The algorithms are ordered by increasing precision in their
@@ -116,9 +114,11 @@ Flags:
 
            Caller and Callee are *ssa.Function values, which print as
            "(*sync/atomic.Mutex).Lock", but other attributes may be
-           derived from them, e.g. Caller.Pkg.Pkg.Path yields the
+           derived from them, e.g. Caller.Pkg.Object.Path yields the
            import path of the enclosing package.  Consult the go/ssa
            API documentation for details.
+
+` + loader.FromArgsUsage + `
 
 Examples:
 
@@ -128,7 +128,7 @@ Examples:
 
   Same, but show only the packages of each function:
 
-    callgraph -format '{{.Caller.Pkg.Pkg.Path}} -> {{.Callee.Pkg.Pkg.Path}}' \
+    callgraph -format '{{.Caller.Pkg.Object.Path}} -> {{.Callee.Pkg.Object.Path}}' \
       $GOROOT/src/net/http/triv.go | sort | uniq
 
   Show functions that make dynamic calls into the 'fmt' test package,
@@ -158,7 +158,7 @@ func init() {
 
 func main() {
 	flag.Parse()
-	if err := doCallgraph("", "", *algoFlag, *formatFlag, *testFlag, flag.Args()); err != nil {
+	if err := doCallgraph(&build.Default, *algoFlag, *formatFlag, *testFlag, flag.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "callgraph: %s\n", err)
 		os.Exit(1)
 	}
@@ -166,31 +166,28 @@ func main() {
 
 var stdout io.Writer = os.Stdout
 
-func doCallgraph(dir, gopath, algo, format string, tests bool, args []string) error {
+func doCallgraph(ctxt *build.Context, algo, format string, tests bool, args []string) error {
+	conf := loader.Config{Build: ctxt}
+
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, Usage)
+		fmt.Fprintln(os.Stderr, Usage)
 		return nil
 	}
 
-	cfg := &packages.Config{
-		Mode:  packages.LoadAllSyntax,
-		Tests: tests,
-		Dir:   dir,
-	}
-	if gopath != "" {
-		cfg.Env = append(os.Environ(), "GOPATH="+gopath) // to enable testing
-	}
-	initial, err := packages.Load(cfg, args...)
+	// Use the initial packages from the command line.
+	args, err := conf.FromArgs(args, tests)
 	if err != nil {
 		return err
 	}
-	if packages.PrintErrors(initial) > 0 {
-		return fmt.Errorf("packages contain errors")
+
+	// Load, parse and type-check the whole program.
+	iprog, err := conf.Load()
+	if err != nil {
+		return err
 	}
 
 	// Create and build SSA-form program representation.
-	mode := ssa.InstantiateGenerics // instantiate generics by default for soundness
-	prog, pkgs := ssautil.AllPackages(initial, mode)
+	prog := ssautil.CreateProgram(iprog, 0)
 	prog.Build()
 
 	// -- call graph construction ------------------------------------------
@@ -224,12 +221,12 @@ func doCallgraph(dir, gopath, algo, format string, tests bool, args []string) er
 			}
 		}
 
-		mains, err := mainPackages(pkgs)
+		main, err := mainPackage(prog, tests)
 		if err != nil {
 			return err
 		}
 		config := &pointer.Config{
-			Mains:          mains,
+			Mains:          []*ssa.Package{main},
 			BuildCallGraph: true,
 			Log:            ptalog,
 		}
@@ -240,21 +237,18 @@ func doCallgraph(dir, gopath, algo, format string, tests bool, args []string) er
 		cg = ptares.CallGraph
 
 	case "rta":
-		mains, err := mainPackages(pkgs)
+		main, err := mainPackage(prog, tests)
 		if err != nil {
 			return err
 		}
-		var roots []*ssa.Function
-		for _, main := range mains {
-			roots = append(roots, main.Func("init"), main.Func("main"))
+		roots := []*ssa.Function{
+			main.Func("init"),
+			main.Func("main"),
 		}
 		rtares := rta.Analyze(roots, true)
 		cg = rtares.CallGraph
 
 		// NB: RTA gives us Reachable and RuntimeTypes too.
-
-	case "vta":
-		cg = vta.CallGraph(ssautil.AllFunctions(prog), cha.CallGraph(prog))
 
 	default:
 		return fmt.Errorf("unknown algorithm: %s", algo)
@@ -309,19 +303,35 @@ func doCallgraph(dir, gopath, algo, format string, tests bool, args []string) er
 	return nil
 }
 
-// mainPackages returns the main packages to analyze.
-// Each resulting package is named "main" and has a main function.
-func mainPackages(pkgs []*ssa.Package) ([]*ssa.Package, error) {
-	var mains []*ssa.Package
-	for _, p := range pkgs {
-		if p != nil && p.Pkg.Name() == "main" && p.Func("main") != nil {
-			mains = append(mains, p)
+// mainPackage returns the main package to analyze.
+// The resulting package has a main() function.
+func mainPackage(prog *ssa.Program, tests bool) (*ssa.Package, error) {
+	pkgs := prog.AllPackages()
+
+	// TODO(adonovan): allow independent control over tests, mains and libraries.
+	// TODO(adonovan): put this logic in a library; we keep reinventing it.
+
+	if tests {
+		// If -test, use all packages' tests.
+		if len(pkgs) > 0 {
+			if main := prog.CreateTestMainPackage(pkgs...); main != nil {
+				return main, nil
+			}
+		}
+		return nil, fmt.Errorf("no tests")
+	}
+
+	// Otherwise, use the first package named main.
+	for _, pkg := range pkgs {
+		if pkg.Pkg.Name() == "main" {
+			if pkg.Func("main") == nil {
+				return nil, fmt.Errorf("no func main() in main package")
+			}
+			return pkg, nil
 		}
 	}
-	if len(mains) == 0 {
-		return nil, fmt.Errorf("no main packages")
-	}
-	return mains, nil
+
+	return nil, fmt.Errorf("no main package")
 }
 
 type Edge struct {

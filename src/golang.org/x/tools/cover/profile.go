@@ -8,11 +8,10 @@ package cover // import "golang.org/x/tools/cover"
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,18 +45,14 @@ func ParseProfiles(fileName string) ([]*Profile, error) {
 		return nil, err
 	}
 	defer pf.Close()
-	return ParseProfilesFromReader(pf)
-}
 
-// ParseProfilesFromReader parses profile data from the Reader and
-// returns a Profile for each source file described therein.
-func ParseProfilesFromReader(rd io.Reader) ([]*Profile, error) {
+	files := make(map[string]*Profile)
+	buf := bufio.NewReader(pf)
 	// First line is "mode: foo", where foo is "set", "count", or "atomic".
 	// Rest of file is in the format
 	//	encoding/base64/base64.go:34.44,37.40 3 1
 	// where the fields are: name.go:line.column,line.column numberOfStatements count
-	files := make(map[string]*Profile)
-	s := bufio.NewScanner(rd)
+	s := bufio.NewScanner(buf)
 	mode := ""
 	for s.Scan() {
 		line := s.Text()
@@ -69,10 +64,11 @@ func ParseProfilesFromReader(rd io.Reader) ([]*Profile, error) {
 			mode = line[len(p):]
 			continue
 		}
-		fn, b, err := parseLine(line)
-		if err != nil {
-			return nil, fmt.Errorf("line %q doesn't match expected format: %v", line, err)
+		m := lineRe.FindStringSubmatch(line)
+		if m == nil {
+			return nil, fmt.Errorf("line %q doesn't match expected format: %v", m, lineRe)
 		}
+		fn := m[1]
 		p := files[fn]
 		if p == nil {
 			p = &Profile{
@@ -81,36 +77,20 @@ func ParseProfilesFromReader(rd io.Reader) ([]*Profile, error) {
 			}
 			files[fn] = p
 		}
-		p.Blocks = append(p.Blocks, b)
+		p.Blocks = append(p.Blocks, ProfileBlock{
+			StartLine: toInt(m[2]),
+			StartCol:  toInt(m[3]),
+			EndLine:   toInt(m[4]),
+			EndCol:    toInt(m[5]),
+			NumStmt:   toInt(m[6]),
+			Count:     toInt(m[7]),
+		})
 	}
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
 	for _, p := range files {
 		sort.Sort(blocksByStart(p.Blocks))
-		// Merge samples from the same location.
-		j := 1
-		for i := 1; i < len(p.Blocks); i++ {
-			b := p.Blocks[i]
-			last := p.Blocks[j-1]
-			if b.StartLine == last.StartLine &&
-				b.StartCol == last.StartCol &&
-				b.EndLine == last.EndLine &&
-				b.EndCol == last.EndCol {
-				if b.NumStmt != last.NumStmt {
-					return nil, fmt.Errorf("inconsistent NumStmt: changed from %d to %d", last.NumStmt, b.NumStmt)
-				}
-				if mode == "set" {
-					p.Blocks[j-1].Count |= b.Count
-				} else {
-					p.Blocks[j-1].Count += b.Count
-				}
-				continue
-			}
-			p.Blocks[j] = b
-			j++
-		}
-		p.Blocks = p.Blocks[:j]
 	}
 	// Generate a sorted slice.
 	profiles := make([]*Profile, 0, len(files))
@@ -119,67 +99,6 @@ func ParseProfilesFromReader(rd io.Reader) ([]*Profile, error) {
 	}
 	sort.Sort(byFileName(profiles))
 	return profiles, nil
-}
-
-// parseLine parses a line from a coverage file.
-// It is equivalent to the regex
-// ^(.+):([0-9]+)\.([0-9]+),([0-9]+)\.([0-9]+) ([0-9]+) ([0-9]+)$
-//
-// However, it is much faster: https://golang.org/cl/179377
-func parseLine(l string) (fileName string, block ProfileBlock, err error) {
-	end := len(l)
-
-	b := ProfileBlock{}
-	b.Count, end, err = seekBack(l, ' ', end, "Count")
-	if err != nil {
-		return "", b, err
-	}
-	b.NumStmt, end, err = seekBack(l, ' ', end, "NumStmt")
-	if err != nil {
-		return "", b, err
-	}
-	b.EndCol, end, err = seekBack(l, '.', end, "EndCol")
-	if err != nil {
-		return "", b, err
-	}
-	b.EndLine, end, err = seekBack(l, ',', end, "EndLine")
-	if err != nil {
-		return "", b, err
-	}
-	b.StartCol, end, err = seekBack(l, '.', end, "StartCol")
-	if err != nil {
-		return "", b, err
-	}
-	b.StartLine, end, err = seekBack(l, ':', end, "StartLine")
-	if err != nil {
-		return "", b, err
-	}
-	fn := l[0:end]
-	if fn == "" {
-		return "", b, errors.New("a FileName cannot be blank")
-	}
-	return fn, b, nil
-}
-
-// seekBack searches backwards from end to find sep in l, then returns the
-// value between sep and end as an integer.
-// If seekBack fails, the returned error will reference what.
-func seekBack(l string, sep byte, end int, what string) (value int, nextSep int, err error) {
-	// Since we're seeking backwards and we know only ASCII is legal for these values,
-	// we can ignore the possibility of non-ASCII characters.
-	for start := end - 1; start >= 0; start-- {
-		if l[start] == sep {
-			i, err := strconv.Atoi(l[start+1 : end])
-			if err != nil {
-				return 0, 0, fmt.Errorf("couldn't parse %q: %v", what, err)
-			}
-			if i < 0 {
-				return 0, 0, fmt.Errorf("negative values are not allowed for %s, found %d", what, i)
-			}
-			return i, start, nil
-		}
-	}
-	return 0, 0, fmt.Errorf("couldn't find a %s before %s", string(sep), what)
 }
 
 type blocksByStart []ProfileBlock
@@ -191,6 +110,16 @@ func (b blocksByStart) Less(i, j int) bool {
 	return bi.StartLine < bj.StartLine || bi.StartLine == bj.StartLine && bi.StartCol < bj.StartCol
 }
 
+var lineRe = regexp.MustCompile(`^(.+):([0-9]+).([0-9]+),([0-9]+).([0-9]+) ([0-9]+) ([0-9]+)$`)
+
+func toInt(s string) int {
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		panic(err)
+	}
+	return i
+}
+
 // Boundary represents the position in a source file of the beginning or end of a
 // block as reported by the coverage profile. In HTML mode, it will correspond to
 // the opening or closing of a <span> tag and will be used to colorize the source
@@ -199,7 +128,6 @@ type Boundary struct {
 	Start  bool    // Is this the start of a block?
 	Count  int     // Event count from the cover profile.
 	Norm   float64 // Count normalized to [0..1].
-	Index  int     // Order in input file.
 }
 
 // Boundaries returns a Profile as a set of Boundary objects within the provided src.
@@ -215,10 +143,8 @@ func (p *Profile) Boundaries(src []byte) (boundaries []Boundary) {
 	divisor := math.Log(float64(max))
 
 	// boundary returns a Boundary, populating the Norm field with a normalized Count.
-	index := 0
 	boundary := func(offset int, start bool, count int) Boundary {
-		b := Boundary{Offset: offset, Start: start, Count: count, Index: index}
-		index++
+		b := Boundary{Offset: offset, Start: start, Count: count}
 		if !start || count == 0 {
 			return b
 		}
@@ -258,9 +184,7 @@ func (b boundariesByPos) Len() int      { return len(b) }
 func (b boundariesByPos) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
 func (b boundariesByPos) Less(i, j int) bool {
 	if b[i].Offset == b[j].Offset {
-		// Boundaries at the same offset should be ordered according to
-		// their original position.
-		return b[i].Index < b[j].Index
+		return !b[i].Start && b[j].Start
 	}
 	return b[i].Offset < b[j].Offset
 }

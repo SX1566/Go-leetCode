@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// +build go1.5
+
 package loader_test
 
 // This file enumerates all packages beneath $GOROOT, loads them, plus
@@ -24,17 +26,12 @@ import (
 
 	"golang.org/x/tools/go/buildutil"
 	"golang.org/x/tools/go/loader"
-	"golang.org/x/tools/internal/testenv"
 )
 
 func TestStdlib(t *testing.T) {
 	if runtime.GOOS == "android" {
 		t.Skipf("incomplete std lib on %s", runtime.GOOS)
 	}
-	if testing.Short() {
-		t.Skip("skipping in short mode; uses tons of memory (https://golang.org/issue/14113)")
-	}
-	testenv.NeedsTool(t, "go")
 
 	runtime.GC()
 	t0 := time.Now()
@@ -79,15 +76,17 @@ func TestStdlib(t *testing.T) {
 		}
 	}
 
-	// Check that Test functions for regexp and compress/bzip2 are
-	// simultaneously present. The apparent cycle formed when augmenting
-	// these packages by their tests (together with io/ioutil's test, which is now
-	// an xtest) was the original motivation or reporting golang.org/issue/7114.
+	// Check that Test functions for io/ioutil, regexp and
+	// compress/bzip2 are all simultaneously present.
+	// (The apparent cycle formed when augmenting all three of
+	// these packages by their tests was the original motivation
+	// for reporting b/7114.)
 	//
 	// compress/bzip2.TestBitReader in bzip2_test.go    imports io/ioutil
-	// io/ioutil.TestTempFile       in tempfile_test.go imports regexp (no longer exists)
+	// io/ioutil.TestTempFile       in tempfile_test.go imports regexp
 	// regexp.TestRE2Search         in exec_test.go     imports compress/bzip2
 	for _, test := range []struct{ pkg, fn string }{
+		{"io/ioutil", "TestTempFile"},
 		{"regexp", "TestRE2Search"},
 		{"compress/bzip2", "TestBitReader"},
 	} {
@@ -119,9 +118,6 @@ func TestStdlib(t *testing.T) {
 }
 
 func TestCgoOption(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode; uses tons of memory (https://golang.org/issue/14113)")
-	}
 	switch runtime.GOOS {
 	// On these systems, the net and os/user packages don't use cgo
 	// or the std library is incomplete (Android).
@@ -134,8 +130,6 @@ func TestCgoOption(t *testing.T) {
 	if !build.Default.CgoEnabled {
 		return
 	}
-	testenv.NeedsTool(t, "go")
-
 	// Test that we can load cgo-using packages with
 	// CGO_ENABLED=[01], which causes go/build to select pure
 	// Go/native implementations, respectively, based on build
@@ -152,7 +146,7 @@ func TestCgoOption(t *testing.T) {
 		pkg, name, genericFile string
 	}{
 		{"net", "cgoLookupHost", "cgo_stub.go"},
-		{"os/user", "current", "lookup_stubs.go"},
+		{"os/user", "lookupId", "lookup_stubs.go"},
 	} {
 		ctxt := build.Default
 		for _, ctxt.CgoEnabled = range []bool{false, true} {

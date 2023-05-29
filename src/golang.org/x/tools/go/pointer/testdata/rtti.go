@@ -1,6 +1,6 @@
 package main
 
-// Regression test for guru crash
+// Regression test for oracle crash
 // https://code.google.com/p/go/issues/detail?id=6605
 //
 // Using reflection, methods may be called on types that are not the
@@ -25,5 +25,5 @@ type I interface {
 
 func main() {
 	type Y struct{ X }
-	print(reflect.Indirect(reflect.ValueOf(new(Y))).Interface().(I).F()) // @pointsto command-line-arguments.a
+	print(reflect.Indirect(reflect.ValueOf(new(Y))).Interface().(I).F()) // @pointsto main.a
 }

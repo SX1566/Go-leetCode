@@ -150,16 +150,6 @@ func TestZipFSStatFuncs(t *testing.T) {
 	}
 }
 
-func TestZipFSNotExist(t *testing.T) {
-	_, err := fs.Open("/does-not-exist")
-	if err == nil {
-		t.Fatalf("Expected an error.\n")
-	}
-	if !os.IsNotExist(err) {
-		t.Errorf("Expected an error satisfying os.IsNotExist: %v\n", err)
-	}
-}
-
 func TestZipFSOpenSeek(t *testing.T) {
 	for _, test := range tests {
 		if test.IsRegular {
@@ -184,23 +174,6 @@ func TestZipFSOpenSeek(t *testing.T) {
 				}
 				f.Seek(0, 0)
 			}
-		}
-	}
-}
-
-func TestRootType(t *testing.T) {
-	tests := []struct {
-		path   string
-		fsType vfs.RootType
-	}{
-		{"/src/net/http", vfs.RootTypeGoRoot},
-		{"/src/badpath", ""},
-		{"/", vfs.RootTypeGoRoot},
-	}
-
-	for _, item := range tests {
-		if fs.RootType(item.path) != item.fsType {
-			t.Errorf("unexpected fsType. Expected- %v, Got- %v", item.fsType, fs.RootType(item.path))
 		}
 	}
 }
